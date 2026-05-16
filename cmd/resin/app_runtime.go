@@ -416,6 +416,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		MetricsSink:       a.metricsManager,
 		OutboundTransport: outboundTransportCfg,
 		TransportPool:     a.transportPool,
+		ProxyBypassRules:  a.envCfg.ProxyBypassRules,
 	})
 
 	reverseProxy := proxy.NewReverseProxy(proxy.ReverseProxyConfig{
@@ -430,15 +431,17 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		MetricsSink:       a.metricsManager,
 		OutboundTransport: outboundTransportCfg,
 		TransportPool:     a.transportPool,
+		ProxyBypassRules:  a.envCfg.ProxyBypassRules,
 	})
 	socks5Inbound := proxy.NewSocks5Inbound(proxy.Socks5InboundConfig{
-		ProxyToken:  a.envCfg.ProxyToken,
-		AuthVersion: string(a.envCfg.AuthVersion),
-		Router:      a.topoRuntime.router,
-		Pool:        a.topoRuntime.pool,
-		Health:      a.topoRuntime.pool,
-		Events:      proxyEvents,
-		MetricsSink: a.metricsManager,
+		ProxyToken:       a.envCfg.ProxyToken,
+		AuthVersion:      string(a.envCfg.AuthVersion),
+		Router:           a.topoRuntime.router,
+		Pool:             a.topoRuntime.pool,
+		Health:           a.topoRuntime.pool,
+		Events:           proxyEvents,
+		MetricsSink:      a.metricsManager,
+		ProxyBypassRules: a.envCfg.ProxyBypassRules,
 	})
 
 	inboundHandler := newInboundMux(

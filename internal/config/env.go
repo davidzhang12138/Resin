@@ -45,6 +45,7 @@ type EnvConfig struct {
 	ProxyTransportMaxIdleConns                      int
 	ProxyTransportMaxIdleConnsPerHost               int
 	ProxyTransportIdleConnTimeout                   time.Duration
+	ProxyBypassRules                                []string
 
 	// Request log
 	RequestLogQueueSize           int
@@ -125,6 +126,7 @@ func LoadEnvConfig() (*EnvConfig, error) {
 	cfg.ProxyTransportMaxIdleConns = envInt("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS", 1024, &errs)
 	cfg.ProxyTransportMaxIdleConnsPerHost = envInt("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", 64, &errs)
 	cfg.ProxyTransportIdleConnTimeout = envDuration("RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT", 90*time.Second, &errs)
+	cfg.ProxyBypassRules = envDelimitedStringSlice("RESIN_PROXY_BYPASS", []string{})
 
 	// --- Request log ---
 	cfg.RequestLogQueueSize = envInt("RESIN_REQUEST_LOG_QUEUE_SIZE", 8192, &errs)
@@ -388,6 +390,31 @@ func envStringSlice(key string, defaultVal []string, errs *[]string) []string {
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
 		*errs = append(*errs, fmt.Sprintf("%s: invalid JSON string array %q", key, v))
 		return defaultVal
+	}
+	if out == nil {
+		return []string{}
+	}
+	return out
+}
+
+func envDelimitedStringSlice(key string, defaultVal []string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultVal
+	}
+	return splitDelimitedStringSlice(v)
+}
+
+func splitDelimitedStringSlice(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == ',' || r == '\n' || r == '\r'
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field != "" {
+			out = append(out, field)
+		}
 	}
 	if out == nil {
 		return []string{}

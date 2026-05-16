@@ -387,6 +387,7 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "可查看数据库状态并进行 IP 查询。": "View database status and run IP lookups.",
   "可观测性指标": "Observability metrics",
   "空闲连接超时时间": "Idle connection timeout",
+  "代理直连目标": "Direct proxy targets",
   "控制面最大请求体": "Control-plane max request body",
   "快速定位异常节点并进行探测处理。":
     "Quickly locate abnormal nodes and probe them.",

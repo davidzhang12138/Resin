@@ -73,6 +73,7 @@ func TestLoadEnvConfig_Defaults(t *testing.T) {
 	assertEqual(t, "ProxyTransportMaxIdleConns", cfg.ProxyTransportMaxIdleConns, 1024)
 	assertEqual(t, "ProxyTransportMaxIdleConnsPerHost", cfg.ProxyTransportMaxIdleConnsPerHost, 64)
 	assertEqual(t, "ProxyTransportIdleConnTimeout", cfg.ProxyTransportIdleConnTimeout, 90*time.Second)
+	assertEqual(t, "ProxyBypassRulesLength", len(cfg.ProxyBypassRules), 0)
 
 	// Request log
 	assertEqual(t, "RequestLogQueueSize", cfg.RequestLogQueueSize, 8192)
@@ -116,6 +117,7 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS"] = "2048"
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST"] = "128"
 	envs["RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT"] = "2m"
+	envs["RESIN_PROXY_BYPASS"] = "localhost;127.*; 192.168.*\n<local>,10.0.0.0/8"
 	envs["RESIN_REQUEST_LOG_QUEUE_FLUSH_INTERVAL"] = "10m"
 	setEnvs(t, envs)
 
@@ -158,6 +160,12 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	assertEqual(t, "ProxyTransportMaxIdleConns", cfg.ProxyTransportMaxIdleConns, 2048)
 	assertEqual(t, "ProxyTransportMaxIdleConnsPerHost", cfg.ProxyTransportMaxIdleConnsPerHost, 128)
 	assertEqual(t, "ProxyTransportIdleConnTimeout", cfg.ProxyTransportIdleConnTimeout, 2*time.Minute)
+	assertEqual(t, "ProxyBypassRulesLength", len(cfg.ProxyBypassRules), 5)
+	assertEqual(t, "ProxyBypassRules[0]", cfg.ProxyBypassRules[0], "localhost")
+	assertEqual(t, "ProxyBypassRules[1]", cfg.ProxyBypassRules[1], "127.*")
+	assertEqual(t, "ProxyBypassRules[2]", cfg.ProxyBypassRules[2], "192.168.*")
+	assertEqual(t, "ProxyBypassRules[3]", cfg.ProxyBypassRules[3], "<local>")
+	assertEqual(t, "ProxyBypassRules[4]", cfg.ProxyBypassRules[4], "10.0.0.0/8")
 	if cfg.RequestLogQueueFlushInterval.String() != "10m0s" {
 		t.Errorf("RequestLogQueueFlushInterval: got %v, want 10m", cfg.RequestLogQueueFlushInterval)
 	}

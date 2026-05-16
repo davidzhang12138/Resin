@@ -2299,6 +2299,7 @@ GeoIP 与订阅的下载都有错误重试的需求。
 * `RESIN_NODE_DNS_UPSTREAMS`：Resin 托管节点域名解析上游，JSON 字符串数组。默认值为 `["https://doh.pub/dns-query","https://dns.alidns.com/dns-query","tls://223.5.5.5?sni=dns.alidns.com","local"]`；设置后完全按数组顺序作为 failover 链。仅作用于内部 sing-box builder 解析节点域名，不影响订阅下载、GeoIP 下载等其他资源下载路径。
   * 支持：`local`、`udp://host[:port]`、`tcp://host[:port]`、`tls://host[:port]?sni=name`、`quic://host[:port]?sni=name`、`https://host[:port][/path]?sni=name&bootstrap=local`、`h3://host[:port][/path]?sni=name&bootstrap=local`。
   * 默认端口由传输类型决定：UDP/TCP 为 53，DoT/DoQ 为 853，DoH/H3 为 443；DoH/H3 默认路径为 `/dns-query`。
+* `RESIN_PROXY_BYPASS`：不走代理节点的目标规则，默认空。用分号、逗号或换行分隔；命中规则的 HTTP 正向代理、SOCKS5 正向代理与反向代理请求会由 Resin 本机直连目标。支持精确主机、`*`/`?` 通配符、CIDR 网段与 `<local>`（无点号本地域名），例如 `localhost;127.*;10.*;172.16.0.0/12;192.168.*;<local>`。
 
 日志相关配置：
 * `RESIN_REQUEST_LOG_QUEUE_SIZE`：日志写入队列大小。至少是 RESIN_REQUEST_LOG_QUEUE_FLUSH_BATCH_SIZE 的两倍。默认 8192。

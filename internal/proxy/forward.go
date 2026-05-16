@@ -27,6 +27,7 @@ type ForwardProxyConfig struct {
 	MetricsSink       MetricsEventSink
 	OutboundTransport OutboundTransportConfig
 	TransportPool     *OutboundTransportPool
+	ProxyBypassRules  []string
 }
 
 // ForwardProxy implements an HTTP forward proxy with Proxy-Authorization
@@ -42,6 +43,9 @@ type ForwardProxy struct {
 	transportConfig   OutboundTransportConfig
 	transportPool     *OutboundTransportPool
 	transportPoolOnce sync.Once
+	directTransport   *http.Transport
+	directOnce        sync.Once
+	bypass            *TargetBypassMatcher
 }
 
 // NewForwardProxy creates a new forward proxy handler.
@@ -69,6 +73,7 @@ func NewForwardProxy(cfg ForwardProxyConfig) *ForwardProxy {
 		metricsSink:     cfg.MetricsSink,
 		transportConfig: transportCfg,
 		transportPool:   transportPool,
+		bypass:          NewTargetBypassMatcher(cfg.ProxyBypassRules),
 	}
 }
 
@@ -79,6 +84,13 @@ func (p *ForwardProxy) outboundHTTPTransport(routed routedOutbound) *http.Transp
 		}
 	})
 	return p.transportPool.Get(routed.Route.NodeHash, routed.Outbound, p.metricsSink)
+}
+
+func (p *ForwardProxy) directHTTPTransport() *http.Transport {
+	p.directOnce.Do(func() {
+		p.directTransport = newDirectHTTPTransport(p.transportConfig, p.metricsSink)
+	})
+	return p.directTransport
 }
 
 func (p *ForwardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -304,17 +316,27 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	defer lifecycle.finish()
 	lifecycle.setAccount(account)
 
-	routed, routeErr := resolveRoutedOutbound(p.router, p.pool, platName, account, r.Host)
-	if routeErr != nil {
-		lifecycle.setProxyError(routeErr)
-		lifecycle.setHTTPStatus(routeErr.HTTPCode)
-		writeProxyError(w, routeErr)
-		return
+	var route routing.RouteResult
+	var hasRoute bool
+	var transport *http.Transport
+	if p.bypass != nil && p.bypass.ShouldBypass(r.Host) {
+		transport = p.directHTTPTransport()
+	} else {
+		routed, routeErr := resolveRoutedOutbound(p.router, p.pool, platName, account, r.Host)
+		if routeErr != nil {
+			lifecycle.setProxyError(routeErr)
+			lifecycle.setHTTPStatus(routeErr.HTTPCode)
+			writeProxyError(w, routeErr)
+			return
+		}
+		route = routed.Route
+		hasRoute = true
+		lifecycle.setRouteResult(route)
+		if p.health != nil {
+			go p.health.RecordLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
+		}
+		transport = p.outboundHTTPTransport(routed)
 	}
-	lifecycle.setRouteResult(routed.Route)
-	go p.health.RecordLatency(routed.Route.NodeHash, netutil.ExtractDomain(r.Host), nil)
-
-	transport := p.outboundHTTPTransport(routed)
 	outReq := prepareForwardOutboundRequest(r)
 	upstreamTrace := newUpstreamRequestTrace()
 	outReq = outReq.WithContext(httptrace.WithClientTrace(outReq.Context(), upstreamTrace.clientTrace()))
@@ -345,7 +367,9 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setProxyError(proxyErr)
 		lifecycle.setUpstreamError("forward_roundtrip", err)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
-		recordPassiveResultAsync(p.health, routed.Route, false)
+		if hasRoute {
+			recordPassiveResultAsync(p.health, route, false)
+		}
 		writeProxyError(w, proxyErr)
 		return
 	}
@@ -364,13 +388,17 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			lifecycle.setProxyError(ErrUpstreamRequestFailed)
 			lifecycle.setUpstreamError("forward_upstream_to_client_copy", copyErr)
 			lifecycle.setNetOK(false)
-			recordPassiveResultAsync(p.health, routed.Route, false)
+			if hasRoute {
+				recordPassiveResultAsync(p.health, route, false)
+			}
 		}
 		return
 	}
 
 	// Full body transfer succeeded — count as network success even for 5xx HTTP.
-	recordPassiveResultAsync(p.health, routed.Route, true)
+	if hasRoute {
+		recordPassiveResultAsync(p.health, route, true)
+	}
 }
 
 func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +421,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 			pool:        p.pool,
 			health:      p.health,
 			metricsSink: p.metricsSink,
+			bypass:      p.bypass,
 		},
 		platName,
 		account,

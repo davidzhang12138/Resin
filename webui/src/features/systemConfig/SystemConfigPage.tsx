@@ -807,6 +807,15 @@ export function SystemConfigPage() {
                       <label className="field-label" style={{ margin: 0 }}>{t("空闲连接超时时间")}</label>
                       <Input readOnly disabled value={envBaseline.proxy_transport_idle_conn_timeout} />
                     </div>
+                    <div className="field-group field-span-2">
+                      <label className="field-label" style={{ margin: 0 }}>{t("代理直连目标")}</label>
+                      <Textarea
+                        readOnly
+                        disabled
+                        rows={3}
+                        value={envBaseline.proxy_bypass_rules?.join("\n") || t("无")}
+                      />
+                    </div>
                   </div>
                 </section>
 
