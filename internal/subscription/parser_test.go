@@ -1041,6 +1041,37 @@ func TestParseGeneralSubscription_ClashJSON_Hysteria2AdvancedFields(t *testing.T
 	}
 }
 
+func TestParseGeneralSubscription_ClashJSON_Hysteria2CertificateFingerprintDoesNotMapToUTLS(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "hy2-cert-fingerprint",
+				"type": "hysteria2",
+				"server": "hy2.example.com",
+				"port": 443,
+				"password": "password",
+				"sni": "hy2.example.com",
+				"skip-cert-verify": true,
+				"fingerprint": "59777b9f4c7e20e49d88b179b5e3f75031f1e08be731670b2ee09acb6c1f3811"
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	tls := mustMapField(t, obj, "tls")
+	if _, hasUTLS := tls["utls"]; hasUTLS {
+		t.Fatalf("tls.utls should be absent for certificate fingerprint, got %v", tls["utls"])
+	}
+}
+
 func TestParseGeneralSubscription_ClashJSON_HTTPAndSOCKSUnsupportedFieldsIgnored(t *testing.T) {
 	data := []byte(`{
 		"proxies": [
