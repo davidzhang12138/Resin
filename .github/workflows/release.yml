@@ -126,7 +126,7 @@ jobs:
       - name: Check if Pre-release
         id: check_prerelease
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *"-"* ]]; then
+          if [[ "${GITHUB_REF_NAME}" =~ -(alpha|beta|rc|pre|preview|dev)(\.|-|[0-9]|$) ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
@@ -184,7 +184,7 @@ jobs:
       - name: Check if Pre-release
         id: check_prerelease
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *"-"* ]]; then
+          if [[ "${GITHUB_REF_NAME}" =~ -(alpha|beta|rc|pre|preview|dev)(\.|-|[0-9]|$) ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
