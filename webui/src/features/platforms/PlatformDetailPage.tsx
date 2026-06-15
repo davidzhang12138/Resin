@@ -191,6 +191,13 @@ export function PlatformDetailPage() {
   };
 
   const stickyTTL = platform ? formatGoDuration(platform.sticky_ttl, t("默认")) : t("默认");
+  const maxNodeReferenceLatency = platform
+    ? platform.max_node_reference_latency.trim() === ""
+      ? t("继承系统")
+      : platform.max_node_reference_latency.trim() === "0s"
+        ? t("不限制")
+        : formatGoDuration(platform.max_node_reference_latency, platform.max_node_reference_latency)
+    : t("继承系统");
   const regionCount = platform?.region_filters.length ?? 0;
   const regexCount = platform?.regex_filters.length ?? 0;
   const deleteDisabled = !platform || platform.id === ZERO_UUID || deleteMutation.isPending;
@@ -264,6 +271,10 @@ export function PlatformDetailPage() {
                 <span className="platform-fact">
                   <span>{t("租约时长")}</span>
                   <strong>{stickyTTL}</strong>
+                </span>
+                <span className="platform-fact">
+                  <span>{t("最大参考延迟")}</span>
+                  <strong>{maxNodeReferenceLatency}</strong>
                 </span>
                 <span className="platform-fact">
                   <span>{t("策略")}</span>
@@ -365,6 +376,21 @@ export function PlatformDetailPage() {
                       invalid={Boolean(editForm.formState.errors.sticky_ttl)}
                       {...editForm.register("sticky_ttl")}
                     />
+                  </div>
+
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="detail-edit-max-node-reference-latency">
+                      {t("最大节点参考延迟")}
+                    </label>
+                    <Input
+                      id="detail-edit-max-node-reference-latency"
+                      placeholder={t("留空继承系统默认，0s 表示不限制")}
+                      invalid={Boolean(editForm.formState.errors.max_node_reference_latency)}
+                      {...editForm.register("max_node_reference_latency")}
+                    />
+                    <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      {t("填写如 1500ms 或 2s，超过该参考延迟的节点不会进入此平台。")}
+                    </p>
                   </div>
 
                   <div className="field-group">

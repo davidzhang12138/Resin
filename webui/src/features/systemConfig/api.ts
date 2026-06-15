@@ -14,6 +14,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   max_latency_test_interval: "",
   max_authority_latency_test_interval: "",
   max_egress_test_interval: "",
+  max_node_reference_latency: "0s",
   latency_test_url: "",
   latency_authorities: [],
   p2c_latency_window: "",
@@ -68,6 +69,10 @@ function normalizeRuntimeConfig(raw: Partial<RuntimeConfig> | null | undefined):
       DEFAULT_CONFIG.max_authority_latency_test_interval,
     ),
     max_egress_test_interval: asString(raw.max_egress_test_interval, DEFAULT_CONFIG.max_egress_test_interval),
+    max_node_reference_latency: asString(
+      raw.max_node_reference_latency,
+      DEFAULT_CONFIG.max_node_reference_latency,
+    ),
     latency_test_url: asString(raw.latency_test_url, DEFAULT_CONFIG.latency_test_url),
     latency_authorities: Array.isArray(raw.latency_authorities)
       ? raw.latency_authorities.filter((item): item is string => typeof item === "string")

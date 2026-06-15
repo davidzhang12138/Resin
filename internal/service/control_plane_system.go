@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,7 @@ var runtimeConfigAllowedFields = map[string]bool{
 	"max_latency_test_interval":                true,
 	"max_authority_latency_test_interval":      true,
 	"max_egress_test_interval":                 true,
+	"max_node_reference_latency":               true,
 	"latency_test_url":                         true,
 	"latency_authorities":                      true,
 	"p2c_latency_window":                       true,
@@ -92,6 +94,7 @@ var runtimeConfigAllowedFields = map[string]bool{
 var platformPatchAllowedFields = map[string]bool{
 	"name":                                 true,
 	"sticky_ttl":                           true,
+	"max_node_reference_latency":           true,
 	"regex_filters":                        true,
 	"region_filters":                       true,
 	"reverse_proxy_miss_action":            true,
@@ -155,6 +158,7 @@ func (s *ControlPlaneService) PatchRuntimeConfig(patchJSON json.RawMessage) (*co
 	defer s.configMu.Unlock()
 
 	// 3. Deep-copy current config → apply patch.
+	oldCfg := copyRuntimeConfig(s.RuntimeCfg.Load())
 	newCfg := copyRuntimeConfig(s.RuntimeCfg.Load())
 	if verr := parseRuntimeConfigPatch(patchJSON, newCfg); verr != nil {
 		return nil, verr
@@ -186,8 +190,24 @@ func (s *ControlPlaneService) PatchRuntimeConfig(patchJSON json.RawMessage) (*co
 	// 6. Atomic swap.
 	s.RuntimeCfg.Store(newCfg)
 	s.configVersion = newVersion
+	if s.shouldRebuildPlatformViewsForRuntimeConfig(oldCfg, newCfg) && s.Pool != nil {
+		s.Pool.RebuildAllPlatforms()
+	}
 
 	return newCfg, nil
+}
+
+func (s *ControlPlaneService) shouldRebuildPlatformViewsForRuntimeConfig(oldCfg, newCfg *config.RuntimeConfig) bool {
+	if oldCfg == nil {
+		oldCfg = config.NewDefaultRuntimeConfig()
+	}
+	if newCfg == nil {
+		newCfg = config.NewDefaultRuntimeConfig()
+	}
+	if oldCfg.MaxNodeReferenceLatency != newCfg.MaxNodeReferenceLatency {
+		return true
+	}
+	return !slices.Equal(oldCfg.LatencyAuthorities, newCfg.LatencyAuthorities)
 }
 
 func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
@@ -199,6 +219,9 @@ func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
 	latencyDomain := strings.ToLower(netutil.ExtractDomain(u.Host))
 	if cfg.MaxConsecutiveFailures < 0 {
 		return invalidArg("max_consecutive_failures: must be non-negative")
+	}
+	if cfg.MaxNodeReferenceLatency < 0 {
+		return invalidArg("max_node_reference_latency: must be non-negative")
 	}
 	if cfg.CacheFlushDirtyThreshold < 0 {
 		return invalidArg("cache_flush_dirty_threshold: must be non-negative")

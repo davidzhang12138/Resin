@@ -18,6 +18,7 @@ type RuntimeConfig struct {
 	MaxLatencyTestInterval          Duration `json:"max_latency_test_interval"`
 	MaxAuthorityLatencyTestInterval Duration `json:"max_authority_latency_test_interval"`
 	MaxEgressTestInterval           Duration `json:"max_egress_test_interval"`
+	MaxNodeReferenceLatency         Duration `json:"max_node_reference_latency"`
 
 	// Probe
 	LatencyTestURL     string   `json:"latency_test_url"`
@@ -47,6 +48,7 @@ func NewDefaultRuntimeConfig() *RuntimeConfig {
 		MaxLatencyTestInterval:          Duration(1 * time.Hour),
 		MaxAuthorityLatencyTestInterval: Duration(3 * time.Hour),
 		MaxEgressTestInterval:           Duration(24 * time.Hour),
+		MaxNodeReferenceLatency:         Duration(0),
 
 		LatencyTestURL:     "https://www.gstatic.com/generate_204",
 		LatencyAuthorities: []string{"gstatic.com", "google.com", "cloudflare.com", "github.com"},

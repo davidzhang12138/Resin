@@ -391,6 +391,148 @@ func TestRecordLatency_AttemptOnly_UpdatesAttemptTimestamps(t *testing.T) {
 	}
 }
 
+func prepareLatencyCapTestNode(pool *GlobalNodePool, sub *subscription.Subscription, raw string) (node.Hash, *node.NodeEntry) {
+	h := addTestNode(pool, sub, raw)
+	entry, _ := pool.GetEntry(h)
+	ob := testutil.NewNoopOutbound()
+	entry.Outbound.Store(&ob)
+	entry.SetEgressIP(netip.MustParseAddr("1.2.3.4"))
+	pool.RecordResult(h, true)
+	return h, entry
+}
+
+func newLatencyCapTestPool(
+	subMgr *SubscriptionManager,
+	maxReferenceLatency func() time.Duration,
+	decayWindow func() time.Duration,
+) *GlobalNodePool {
+	return NewGlobalNodePool(PoolConfig{
+		SubLookup:               subMgr.Lookup,
+		GeoLookup:               func(addr netip.Addr) string { return "us" },
+		MaxLatencyTableEntries:  16,
+		MaxConsecutiveFailures:  func() int { return 3 },
+		LatencyAuthorities:      func() []string { return []string{"gstatic.com"} },
+		LatencyDecayWindow:      decayWindow,
+		MaxNodeReferenceLatency: maxReferenceLatency,
+	})
+}
+
+func TestRecordLatency_GlobalReferenceLatencyCapFiltersPlatformView(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
+	subMgr.Register(sub)
+	pool := newLatencyCapTestPool(
+		subMgr,
+		func() time.Duration { return 100 * time.Millisecond },
+		func() time.Duration { return 10 * time.Minute },
+	)
+	plat := platform.NewPlatform("p1", "Capped", nil, nil)
+	pool.RegisterPlatform(plat)
+
+	h, _ := prepareLatencyCapTestNode(pool, sub, `{"type":"ss","n":"global-cap"}`)
+	latency := 200 * time.Millisecond
+	pool.RecordLatency(h, "gstatic.com", &latency)
+
+	if plat.View().Size() != 0 {
+		t.Fatal("node above inherited global reference latency cap should not be routable")
+	}
+}
+
+func TestRecordLatency_PlatformReferenceLatencyOverrideAllowsHigherLatency(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
+	subMgr.Register(sub)
+	pool := newLatencyCapTestPool(
+		subMgr,
+		func() time.Duration { return 100 * time.Millisecond },
+		func() time.Duration { return 10 * time.Minute },
+	)
+	plat := platform.NewPlatform("p1", "Override", nil, nil)
+	override := int64(250 * time.Millisecond)
+	plat.MaxNodeReferenceLatencyNs = &override
+	pool.RegisterPlatform(plat)
+
+	h, _ := prepareLatencyCapTestNode(pool, sub, `{"type":"ss","n":"override-cap"}`)
+	latency := 200 * time.Millisecond
+	pool.RecordLatency(h, "gstatic.com", &latency)
+
+	if plat.View().Size() != 1 {
+		t.Fatal("platform override above node reference latency should allow routable node")
+	}
+}
+
+func TestRecordLatency_PlatformReferenceLatencyZeroDisablesGlobalCap(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
+	subMgr.Register(sub)
+	pool := newLatencyCapTestPool(
+		subMgr,
+		func() time.Duration { return 100 * time.Millisecond },
+		func() time.Duration { return 10 * time.Minute },
+	)
+	plat := platform.NewPlatform("p1", "Disabled", nil, nil)
+	disabled := int64(0)
+	plat.MaxNodeReferenceLatencyNs = &disabled
+	pool.RegisterPlatform(plat)
+
+	h, _ := prepareLatencyCapTestNode(pool, sub, `{"type":"ss","n":"disabled-cap"}`)
+	latency := 200 * time.Millisecond
+	pool.RecordLatency(h, "gstatic.com", &latency)
+
+	if plat.View().Size() != 1 {
+		t.Fatal("explicit platform zero cap should disable inherited global cap")
+	}
+}
+
+func TestRecordLatency_GlobalReferenceLatencyCapRequiresAuthorityLatency(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
+	subMgr.Register(sub)
+	pool := newLatencyCapTestPool(
+		subMgr,
+		func() time.Duration { return 100 * time.Millisecond },
+		func() time.Duration { return 10 * time.Minute },
+	)
+	plat := platform.NewPlatform("p1", "NeedsAuthority", nil, nil)
+	pool.RegisterPlatform(plat)
+
+	h, _ := prepareLatencyCapTestNode(pool, sub, `{"type":"ss","n":"missing-authority"}`)
+	latency := 10 * time.Millisecond
+	pool.RecordLatency(h, "example.com", &latency)
+
+	if plat.View().Size() != 0 {
+		t.Fatal("node without authority reference latency should not be routable when cap is active")
+	}
+}
+
+func TestRecordLatency_ReferenceLatencyUpdateReevaluatesPlatformView(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
+	subMgr.Register(sub)
+	pool := newLatencyCapTestPool(
+		subMgr,
+		func() time.Duration { return 100 * time.Millisecond },
+		func() time.Duration { return time.Nanosecond },
+	)
+	plat := platform.NewPlatform("p1", "Reevaluate", nil, nil)
+	pool.RegisterPlatform(plat)
+
+	h, _ := prepareLatencyCapTestNode(pool, sub, `{"type":"ss","n":"latency-update"}`)
+	high := 200 * time.Millisecond
+	pool.RecordLatency(h, "gstatic.com", &high)
+	if plat.View().Size() != 0 {
+		t.Fatal("node above cap should start outside platform view")
+	}
+
+	time.Sleep(time.Millisecond)
+	low := 20 * time.Millisecond
+	pool.RecordLatency(h, "gstatic.com", &low)
+
+	if plat.View().Size() != 1 {
+		t.Fatal("latency update below cap should re-evaluate node into platform view")
+	}
+}
+
 // --- UpdateNodeEgressIP tests ---
 
 func TestUpdateNodeEgressIP_Change(t *testing.T) {

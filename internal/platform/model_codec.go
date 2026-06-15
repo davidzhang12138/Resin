@@ -49,6 +49,7 @@ func NewConfiguredPlatform(
 	regexFilters []*regexp.Regexp,
 	regionFilters []string,
 	stickyTTLNs int64,
+	maxNodeReferenceLatencyNs *int64,
 	missAction string,
 	emptyAccountBehavior string,
 	fixedAccountHeader string,
@@ -62,6 +63,10 @@ func NewConfiguredPlatform(
 	}
 	plat := NewPlatform(id, name, regexFilters, regionFilters)
 	plat.StickyTTLNs = stickyTTLNs
+	if maxNodeReferenceLatencyNs != nil {
+		v := *maxNodeReferenceLatencyNs
+		plat.MaxNodeReferenceLatencyNs = &v
+	}
 	plat.ReverseProxyMissAction = missAction
 	plat.ReverseProxyEmptyAccountBehavior = emptyAccountBehavior
 	plat.ReverseProxyFixedAccountHeader = normalizedFixedHeaders
@@ -88,6 +93,9 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 	}
 	if err := ValidateRegionFilters(mp.RegionFilters); err != nil {
 		return nil, err
+	}
+	if mp.MaxNodeReferenceLatencyNs != nil && *mp.MaxNodeReferenceLatencyNs < 0 {
+		return nil, fmt.Errorf("decode platform %s max_node_reference_latency_ns: must be non-negative", mp.ID)
 	}
 	emptyAccountBehavior := mp.ReverseProxyEmptyAccountBehavior
 	if !ReverseProxyEmptyAccountBehavior(emptyAccountBehavior).IsValid() {
@@ -119,6 +127,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		regexFilters,
 		append([]string(nil), mp.RegionFilters...),
 		mp.StickyTTLNs,
+		mp.MaxNodeReferenceLatencyNs,
 		string(missAction),
 		emptyAccountBehavior,
 		fixedHeader,

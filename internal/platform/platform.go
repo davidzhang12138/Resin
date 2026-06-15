@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/Resinat/Resin/internal/node"
 )
@@ -34,12 +35,16 @@ type Platform struct {
 
 	// Other config fields.
 	StickyTTLNs                      int64
+	MaxNodeReferenceLatencyNs        *int64
 	ReverseProxyMissAction           string
 	ReverseProxyEmptyAccountBehavior string
 	ReverseProxyFixedAccountHeader   string
 	ReverseProxyFixedAccountHeaders  []string
 	AllocationPolicy                 AllocationPolicy
 	PassiveCircuitBreakerDisabled    bool
+
+	systemMaxNodeReferenceLatency func() time.Duration
+	latencyAuthorities            func() []string
 
 	// Routable view & its lock.
 	// viewMu serializes both FullRebuild and NotifyDirty.
@@ -56,6 +61,13 @@ func NewPlatform(id, name string, regexFilters []*regexp.Regexp, regionFilters [
 		RegionFilters: regionFilters,
 		view:          NewRoutableView(),
 	}
+}
+
+// SetReferenceLatencyConfig attaches dynamic system-level reference latency
+// settings used when this platform inherits the system cap.
+func (p *Platform) SetReferenceLatencyConfig(maxLatency func() time.Duration, authorities func() []string) {
+	p.systemMaxNodeReferenceLatency = maxLatency
+	p.latencyAuthorities = authorities
 }
 
 // View returns the platform's routable view as a read-only interface.
@@ -148,7 +160,39 @@ func (p *Platform) evaluateNode(
 		return false
 	}
 
+	// 6. Optional reference latency cap.
+	if maxLatency := p.effectiveMaxNodeReferenceLatency(); maxLatency > 0 {
+		referenceLatency, ok := node.AverageEWMAForDomains(entry, p.currentLatencyAuthorities())
+		if !ok || referenceLatency > maxLatency {
+			return false
+		}
+	}
+
 	return true
+}
+
+func (p *Platform) effectiveMaxNodeReferenceLatency() time.Duration {
+	if p.MaxNodeReferenceLatencyNs != nil {
+		if *p.MaxNodeReferenceLatencyNs <= 0 {
+			return 0
+		}
+		return time.Duration(*p.MaxNodeReferenceLatencyNs)
+	}
+	if p.systemMaxNodeReferenceLatency == nil {
+		return 0
+	}
+	latency := p.systemMaxNodeReferenceLatency()
+	if latency <= 0 {
+		return 0
+	}
+	return latency
+}
+
+func (p *Platform) currentLatencyAuthorities() []string {
+	if p.latencyAuthorities == nil {
+		return nil
+	}
+	return p.latencyAuthorities()
 }
 
 // MatchRegionFilter applies include/exclude region filters.

@@ -25,6 +25,7 @@ type PlatformResponse struct {
 	ID                               string   `json:"id"`
 	Name                             string   `json:"name"`
 	StickyTTL                        string   `json:"sticky_ttl"`
+	MaxNodeReferenceLatency          string   `json:"max_node_reference_latency"`
 	RegexFilters                     []string `json:"regex_filters"`
 	RegionFilters                    []string `json:"region_filters"`
 	RoutableNodeCount                int      `json:"routable_node_count"`
@@ -43,6 +44,7 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		ID:                               p.ID,
 		Name:                             p.Name,
 		StickyTTL:                        time.Duration(p.StickyTTLNs).String(),
+		MaxNodeReferenceLatency:          formatOptionalDuration(p.MaxNodeReferenceLatencyNs),
 		RegexFilters:                     append([]string(nil), p.RegexFilters...),
 		RegionFilters:                    append([]string(nil), p.RegionFilters...),
 		RoutableNodeCount:                0,
@@ -53,6 +55,21 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		PassiveCircuitBreakerDisabled:    p.PassiveCircuitBreakerDisabled,
 		UpdatedAt:                        time.Unix(0, p.UpdatedAtNs).UTC().Format(time.RFC3339Nano),
 	}
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	cp := *v
+	return &cp
+}
+
+func formatOptionalDuration(ns *int64) string {
+	if ns == nil {
+		return ""
+	}
+	return time.Duration(*ns).String()
 }
 
 func (s *ControlPlaneService) withRoutableNodeCount(resp PlatformResponse) PlatformResponse {
@@ -70,6 +87,7 @@ func (s *ControlPlaneService) withRoutableNodeCount(resp PlatformResponse) Platf
 type platformConfig struct {
 	Name                             string
 	StickyTTLNs                      int64
+	MaxNodeReferenceLatencyNs        *int64
 	RegexFilters                     []string
 	RegionFilters                    []string
 	ReverseProxyMissAction           string
@@ -96,11 +114,12 @@ func normalizePlatformEmptyAccountBehavior(raw string) string {
 
 func (s *ControlPlaneService) defaultPlatformConfig(name string) platformConfig {
 	return platformConfig{
-		Name:                   name,
-		StickyTTLNs:            int64(s.EnvCfg.DefaultPlatformStickyTTL),
-		RegexFilters:           append([]string(nil), s.EnvCfg.DefaultPlatformRegexFilters...),
-		RegionFilters:          append([]string(nil), s.EnvCfg.DefaultPlatformRegionFilters...),
-		ReverseProxyMissAction: s.EnvCfg.DefaultPlatformReverseProxyMissAction,
+		Name:                      name,
+		StickyTTLNs:               int64(s.EnvCfg.DefaultPlatformStickyTTL),
+		MaxNodeReferenceLatencyNs: nil,
+		RegexFilters:              append([]string(nil), s.EnvCfg.DefaultPlatformRegexFilters...),
+		RegionFilters:             append([]string(nil), s.EnvCfg.DefaultPlatformRegionFilters...),
+		ReverseProxyMissAction:    s.EnvCfg.DefaultPlatformReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(
 			s.EnvCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,
 		),
@@ -115,6 +134,7 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 	return platformConfig{
 		Name:                             mp.Name,
 		StickyTTLNs:                      mp.StickyTTLNs,
+		MaxNodeReferenceLatencyNs:        cloneInt64Ptr(mp.MaxNodeReferenceLatencyNs),
 		RegexFilters:                     append([]string(nil), mp.RegexFilters...),
 		RegionFilters:                    append([]string(nil), mp.RegionFilters...),
 		ReverseProxyMissAction:           mp.ReverseProxyMissAction,
@@ -130,6 +150,7 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		ID:                               id,
 		Name:                             cfg.Name,
 		StickyTTLNs:                      cfg.StickyTTLNs,
+		MaxNodeReferenceLatencyNs:        cloneInt64Ptr(cfg.MaxNodeReferenceLatencyNs),
 		RegexFilters:                     append([]string(nil), cfg.RegexFilters...),
 		RegionFilters:                    append([]string(nil), cfg.RegionFilters...),
 		ReverseProxyMissAction:           cfg.ReverseProxyMissAction,
@@ -152,6 +173,7 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 		compiledRegexFilters,
 		cfg.RegionFilters,
 		cfg.StickyTTLNs,
+		cfg.MaxNodeReferenceLatencyNs,
 		cfg.ReverseProxyMissAction,
 		cfg.ReverseProxyEmptyAccountBehavior,
 		cfg.ReverseProxyFixedAccountHeader,
@@ -232,6 +254,24 @@ func setPlatformStickyTTL(cfg *platformConfig, d time.Duration) *ServiceError {
 	return nil
 }
 
+func setPlatformMaxNodeReferenceLatency(cfg *platformConfig, raw string) *ServiceError {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		cfg.MaxNodeReferenceLatencyNs = nil
+		return nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return invalidArg("max_node_reference_latency: " + err.Error())
+	}
+	if d < 0 {
+		return invalidArg("max_node_reference_latency: must be non-negative")
+	}
+	ns := int64(d)
+	cfg.MaxNodeReferenceLatencyNs = &ns
+	return nil
+}
+
 func setPlatformMissAction(cfg *platformConfig, missAction string) *ServiceError {
 	if err := validatePlatformMissAction(missAction); err != nil {
 		return err
@@ -261,6 +301,9 @@ func validatePlatformConfig(cfg *platformConfig, validateRegionFilters bool) *Se
 		if err := platform.ValidateRegionFilters(cfg.RegionFilters); err != nil {
 			return invalidArg(err.Error())
 		}
+	}
+	if cfg.MaxNodeReferenceLatencyNs != nil && *cfg.MaxNodeReferenceLatencyNs < 0 {
+		return invalidArg("max_node_reference_latency: must be non-negative")
 	}
 	if err := validatePlatformEmptyAccountConfig(cfg); err != nil {
 		return err
@@ -328,6 +371,7 @@ func (s *ControlPlaneService) GetPlatform(id string) (*PlatformResponse, error) 
 type CreatePlatformRequest struct {
 	Name                             *string  `json:"name"`
 	StickyTTL                        *string  `json:"sticky_ttl"`
+	MaxNodeReferenceLatency          *string  `json:"max_node_reference_latency"`
 	RegexFilters                     []string `json:"regex_filters"`
 	RegionFilters                    []string `json:"region_filters"`
 	ReverseProxyMissAction           *string  `json:"reverse_proxy_miss_action"`
@@ -362,6 +406,11 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 			return nil, invalidArg("sticky_ttl: " + err.Error())
 		}
 		if err := setPlatformStickyTTL(&cfg, d); err != nil {
+			return nil, err
+		}
+	}
+	if req.MaxNodeReferenceLatency != nil {
+		if err := setPlatformMaxNodeReferenceLatency(&cfg, *req.MaxNodeReferenceLatency); err != nil {
 			return nil, err
 		}
 	}
@@ -459,6 +508,14 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 		return nil, err
 	} else if ok {
 		if err := setPlatformStickyTTL(&cfg, d); err != nil {
+			return nil, err
+		}
+	}
+
+	if raw, ok, err := patch.optionalString("max_node_reference_latency"); err != nil {
+		return nil, err
+	} else if ok {
+		if err := setPlatformMaxNodeReferenceLatency(&cfg, raw); err != nil {
 			return nil, err
 		}
 	}
