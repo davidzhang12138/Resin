@@ -87,6 +87,70 @@ func (s *ControlPlaneService) GetLease(platformID, account string) (*LeaseRespon
 	return &resp, nil
 }
 
+// ReassignLease moves an existing lease to a different routable node on the same platform.
+// It recomputes the egress IP from the target node, renews the expiry to now + platform
+// sticky TTL, and preserves the original account and created-at. The replacement is
+// persisted via Router.UpsertLease (emits LeaseReplace -> marks dirty -> flushes cache.db).
+func (s *ControlPlaneService) ReassignLease(platformID, account, targetNodeHash string) (*LeaseResponse, error) {
+	plat, ok := s.Pool.GetPlatform(platformID)
+	if !ok {
+		return nil, notFound("platform not found")
+	}
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return nil, invalidArg("account: must be non-empty")
+	}
+	targetNodeHash = strings.TrimSpace(targetNodeHash)
+	if targetNodeHash == "" {
+		return nil, invalidArg("node_hash: must be non-empty")
+	}
+
+	targetHash, err := node.ParseHex(targetNodeHash)
+	if err != nil {
+		return nil, invalidArg("node_hash: invalid format")
+	}
+	if !plat.View().Contains(targetHash) {
+		return nil, invalidArg("node not routable on this platform")
+	}
+	entry, ok := s.Pool.GetEntry(targetHash)
+	if !ok {
+		return nil, invalidArg("node not routable on this platform")
+	}
+	egressIP := entry.GetEgressIP()
+	if !egressIP.IsValid() {
+		return nil, invalidArg("target node has no egress IP")
+	}
+
+	current := s.Router.ReadLease(model.LeaseKey{PlatformID: platformID, Account: account})
+	if current == nil {
+		return nil, notFound("lease not found")
+	}
+	nowNs := time.Now().UnixNano()
+	if current.ExpiryNs < nowNs {
+		return nil, notFound("lease not found")
+	}
+
+	next := *current
+	next.NodeHash = targetHash.Hex()
+	next.EgressIP = egressIP.String()
+	next.ExpiryNs = nowNs + plat.StickyTTLNs
+	next.LastAccessedNs = nowNs
+
+	if err := s.Router.UpsertLease(next); err != nil {
+		return nil, internal("reassign lease", err)
+	}
+
+	resp := leaseToResponse(model.Lease{
+		PlatformID:     next.PlatformID,
+		Account:        next.Account,
+		NodeHash:       next.NodeHash,
+		EgressIP:       next.EgressIP,
+		ExpiryNs:       next.ExpiryNs,
+		LastAccessedNs: next.LastAccessedNs,
+	}, s.resolveLeaseNodeTag(targetHash))
+	return &resp, nil
+}
+
 // InheritLeaseByPlatformName copies a valid parent lease onto newAccount.
 func (s *ControlPlaneService) InheritLeaseByPlatformName(platformName, parentAccount, newAccount string) error {
 	platformName = strings.TrimSpace(platformName)
