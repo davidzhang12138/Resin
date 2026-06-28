@@ -1,5 +1,12 @@
 import { apiRequest } from "../../lib/api-client";
-import type { PageResponse, Platform, PlatformCreateInput, PlatformUpdateInput } from "./types";
+import type {
+  LeaseResponse,
+  PageResponse,
+  Platform,
+  PlatformCreateInput,
+  PlatformUpdateInput,
+  ReassignLeaseInput,
+} from "./types";
 
 const basePath = "/api/v1/platforms";
 
@@ -113,4 +120,47 @@ export async function clearAllPlatformLeases(id: string): Promise<void> {
   await apiRequest<void>(`${basePath}/${id}/leases`, {
     method: "DELETE",
   });
+}
+
+export type ListPlatformLeasesInput = {
+  account?: string;
+  fuzzy?: boolean;
+  sort_by?: "account" | "expiry" | "last_accessed";
+  sort_order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
+
+export async function listPlatformLeases(
+  platformId: string,
+  input: ListPlatformLeasesInput = {},
+): Promise<PageResponse<LeaseResponse>> {
+  const params = new URLSearchParams();
+  if (input.account) params.set("account", input.account);
+  if (input.fuzzy) params.set("fuzzy", "true");
+  if (input.sort_by) params.set("sort_by", input.sort_by);
+  if (input.sort_order) params.set("sort_order", input.sort_order);
+  if (input.limit !== undefined) params.set("limit", String(input.limit));
+  if (input.offset !== undefined) params.set("offset", String(input.offset));
+  const qs = params.toString();
+  const path = `${basePath}/${platformId}/leases${qs ? `?${qs}` : ""}`;
+  return apiRequest<PageResponse<LeaseResponse>>(path);
+}
+
+export async function reassignLease(
+  platformId: string,
+  account: string,
+  input: ReassignLeaseInput,
+): Promise<LeaseResponse> {
+  return apiRequest<LeaseResponse>(
+    `${basePath}/${platformId}/leases/${encodeURIComponent(account)}`,
+    { method: "PUT", body: input },
+  );
+}
+
+export async function deleteLease(platformId: string, account: string): Promise<void> {
+  await apiRequest<void>(
+    `${basePath}/${platformId}/leases/${encodeURIComponent(account)}`,
+    { method: "DELETE" },
+  );
 }

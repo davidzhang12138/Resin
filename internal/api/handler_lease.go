@@ -149,6 +149,41 @@ func HandleDeleteLease(cp *service.ControlPlaneService) http.HandlerFunc {
 	}
 }
 
+// HandleReassignLease returns a handler for PUT /api/v1/platforms/{id}/leases/{account}.
+// It moves the lease to a different routable node specified by node_hash in the body.
+func HandleReassignLease(cp *service.ControlPlaneService) http.HandlerFunc {
+	type reassignRequest struct {
+		NodeHash string `json:"node_hash"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		platformID, ok := requireUUIDPathParam(w, r, "id", "platform_id")
+		if !ok {
+			return
+		}
+		account, err := validateAccountPath(r)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		var req reassignRequest
+		if err := DecodeBody(r, &req); err != nil {
+			writeDecodeBodyError(w, err)
+			return
+		}
+		req.NodeHash = strings.TrimSpace(req.NodeHash)
+		if req.NodeHash == "" {
+			writeInvalidArgument(w, "node_hash: must be non-empty")
+			return
+		}
+		lease, err := cp.ReassignLease(platformID, account, req.NodeHash)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, lease)
+	}
+}
+
 // HandleDeleteAllLeases returns a handler for DELETE /api/v1/platforms/{id}/leases.
 func HandleDeleteAllLeases(cp *service.ControlPlaneService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,7 @@ import (
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/Resinat/Resin/internal/routing"
 	"github.com/Resinat/Resin/internal/subscription"
+	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/Resinat/Resin/internal/topology"
 )
 
@@ -377,4 +378,165 @@ func TestInheritLeaseByPlatformName_InvalidArguments(t *testing.T) {
 			assertServiceErrorCode(t, err, "INVALID_ARGUMENT")
 		})
 	}
+}
+
+func newReassignTestService(t *testing.T) (*ControlPlaneService, *platform.Platform, node.Hash) {
+	t.Helper()
+	subMgr := topology.NewSubscriptionManager()
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		GeoLookup:              func(netip.Addr) string { return "us" },
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
+	})
+
+	sub := subscription.NewSubscription("sub-1", "Sub1", "https://example.com/sub-1", true, false)
+	subMgr.Register(sub)
+
+	// Seed a fully-routable target node into the pool.
+	raw := []byte(`{"type":"ss","server":"203.0.113.40","port":443}`)
+	targetHash := node.HashFromRawOptions(raw)
+	sub.ManagedNodes().StoreNode(targetHash, subscription.ManagedNode{Tags: []string{"target"}})
+	entry := node.NewNodeEntry(targetHash, raw, time.Now(), 16)
+	entry.AddSubscriptionID(sub.ID)
+	entry.SetEgressIP(netip.MustParseAddr("203.0.113.40"))
+	// A latency record is required by Platform.evaluateNode (HasLatency).
+	entry.LatencyTable.LoadEntry("cloudflare.com", node.DomainLatencyStats{
+		Ewma:        50 * time.Millisecond,
+		LastUpdated: time.Now(),
+	})
+	ob := testutil.NewNoopOutbound()
+	entry.Outbound.Store(&ob)
+	pool.LoadNodeFromBootstrap(entry)
+
+	plat := platform.NewPlatform("plat-reassign", "ReassignPlatform", nil, nil)
+	plat.StickyTTLNs = int64(30 * time.Minute)
+	pool.RegisterPlatform(plat)
+	// Build the routable view so the target node is contained.
+	plat.FullRebuild(pool.Range, pool.MakeSubLookup(), func(netip.Addr) string { return "us" })
+
+	router := routing.NewRouter(routing.RouterConfig{
+		Pool:        pool,
+		Authorities: func() []string { return []string{"cloudflare.com"} },
+		P2CWindow:   func() time.Duration { return 10 * time.Minute },
+	})
+
+	cp := &ControlPlaneService{
+		Pool:   pool,
+		SubMgr: subMgr,
+		Router: router,
+	}
+	return cp, plat, targetHash
+}
+
+func TestReassignLease_Success(t *testing.T) {
+	cp, plat, targetHash := newReassignTestService(t)
+
+	// Seed an existing lease pointing at a different (non-routable) hash.
+	oldHash := node.HashFromRawOptions([]byte(`{"id":"old-node"}`)).Hex()
+	now := time.Now().UnixNano()
+	seedLease(t, cp, model.Lease{
+		PlatformID:     plat.ID,
+		Account:        "alice",
+		NodeHash:       oldHash,
+		EgressIP:       "198.51.100.7",
+		CreatedAtNs:    now - int64(5*time.Minute),
+		ExpiryNs:       now + int64(time.Minute),
+		LastAccessedNs: now - int64(time.Minute),
+	})
+
+	resp, err := cp.ReassignLease(plat.ID, "alice", targetHash.Hex())
+	if err != nil {
+		t.Fatalf("ReassignLease: %v", err)
+	}
+	if resp.NodeHash != targetHash.Hex() {
+		t.Fatalf("node_hash: got %q, want %q", resp.NodeHash, targetHash.Hex())
+	}
+	if resp.EgressIP != "203.0.113.40" {
+		t.Fatalf("egress_ip: got %q, want 203.0.113.40", resp.EgressIP)
+	}
+	if resp.Account != "alice" {
+		t.Fatalf("account: got %q, want alice", resp.Account)
+	}
+
+	// Expiry should be renewed to roughly now + StickyTTLNs.
+	got := cp.Router.ReadLease(model.LeaseKey{PlatformID: plat.ID, Account: "alice"})
+	if got == nil {
+		t.Fatal("expected lease to still exist")
+	}
+	if got.NodeHash != targetHash.Hex() {
+		t.Fatalf("persisted node_hash: got %q, want %q", got.NodeHash, targetHash.Hex())
+	}
+	wantExpiry := now + plat.StickyTTLNs
+	if got.ExpiryNs < wantExpiry-int64(5*time.Second) || got.ExpiryNs > wantExpiry+int64(5*time.Second) {
+		t.Fatalf("expiry_ns: got %d, want ~%d", got.ExpiryNs, wantExpiry)
+	}
+	// Created-at is preserved from the original lease.
+	if got.CreatedAtNs != now-int64(5*time.Minute) {
+		t.Fatalf("created_at_ns: got %d, want %d", got.CreatedAtNs, now-int64(5*time.Minute))
+	}
+
+	// IP load: new egress IP gains a lease, old egress IP loses it.
+	snapshot := cp.Router.SnapshotIPLoad(plat.ID)
+	if n, ok := snapshot[netip.MustParseAddr("203.0.113.40")]; !ok || n < 1 {
+		t.Fatalf("ip_load[new]: got (%d, %t), want >=1", n, ok)
+	}
+	if n, ok := snapshot[netip.MustParseAddr("198.51.100.7")]; ok && n != 0 {
+		t.Fatalf("ip_load[old]: got %d, want 0 or absent", n)
+	}
+}
+
+func TestReassignLease_NodeNotRoutable(t *testing.T) {
+	cp, plat, _ := newReassignTestService(t)
+
+	// A hash that is NOT in the platform's routable view.
+	otherHash := node.HashFromRawOptions([]byte(`{"id":"not-routable-node"}`)).Hex()
+	now := time.Now().UnixNano()
+	seedLease(t, cp, model.Lease{
+		PlatformID: plat.ID, Account: "alice",
+		NodeHash: node.HashFromRawOptions([]byte(`{"id":"old-node"}`)).Hex(),
+		EgressIP: "198.51.100.7", CreatedAtNs: now, ExpiryNs: now + int64(time.Minute),
+		LastAccessedNs: now,
+	})
+
+	_, err := cp.ReassignLease(plat.ID, "alice", otherHash)
+	if err == nil {
+		t.Fatal("expected INVALID_ARGUMENT for non-routable node")
+	}
+	assertServiceErrorCode(t, err, "INVALID_ARGUMENT")
+}
+
+func TestReassignLease_LeaseMissingOrExpired(t *testing.T) {
+	cp, plat, targetHash := newReassignTestService(t)
+
+	// No lease seeded -> not found.
+	_, err := cp.ReassignLease(plat.ID, "ghost", targetHash.Hex())
+	if err == nil {
+		t.Fatal("expected NOT_FOUND for missing lease")
+	}
+	assertServiceErrorCode(t, err, "NOT_FOUND")
+
+	// Expired lease -> not found.
+	now := time.Now().UnixNano()
+	seedLease(t, cp, model.Lease{
+		PlatformID: plat.ID, Account: "bob",
+		NodeHash: node.HashFromRawOptions([]byte(`{"id":"old-node"}`)).Hex(),
+		EgressIP: "198.51.100.8", CreatedAtNs: now - int64(time.Hour),
+		ExpiryNs: now - int64(time.Second), LastAccessedNs: now - int64(time.Minute),
+	})
+	_, err = cp.ReassignLease(plat.ID, "bob", targetHash.Hex())
+	if err == nil {
+		t.Fatal("expected NOT_FOUND for expired lease")
+	}
+	assertServiceErrorCode(t, err, "NOT_FOUND")
+}
+
+func TestReassignLease_PlatformMissing(t *testing.T) {
+	cp, _, targetHash := newReassignTestService(t)
+	_, err := cp.ReassignLease("no-such-platform", "alice", targetHash.Hex())
+	if err == nil {
+		t.Fatal("expected NOT_FOUND for missing platform")
+	}
+	assertServiceErrorCode(t, err, "NOT_FOUND")
 }

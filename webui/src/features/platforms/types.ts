@@ -47,3 +47,17 @@ export type PlatformUpdateInput = {
   allocation_policy?: PlatformAllocationPolicy;
   passive_circuit_breaker_disabled?: boolean;
 };
+
+export type LeaseResponse = {
+  platform_id: string;
+  account: string;
+  node_hash: string;
+  node_tag: string;
+  egress_ip: string;
+  expiry: string;
+  last_accessed: string;
+};
+
+export type ReassignLeaseInput = {
+  node_hash: string;
+};

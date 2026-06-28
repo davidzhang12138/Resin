@@ -94,7 +94,11 @@ export function formatGoDuration(input: string, emptyLabel = "-"): string {
   return `${seconds} 秒`;
 }
 
-export function formatRelativeTime(input: string | null | undefined, emptyLabel = "-"): string {
+export function formatRelativeTimeAt(
+  input: string | null | undefined,
+  now: Date,
+  emptyLabel = "-",
+): string {
   const english = isEnglish();
   if (!input) {
     return emptyLabel;
@@ -105,7 +109,6 @@ export function formatRelativeTime(input: string | null | undefined, emptyLabel 
     return String(input);
   }
 
-  const now = new Date();
   const diff = Math.max(0, now.getTime() - time.getTime());
 
   const seconds = Math.floor(diff / 1000);
@@ -130,4 +133,8 @@ export function formatRelativeTime(input: string | null | undefined, emptyLabel 
   if (hours > 0) return `${hours} 小时前`;
   if (minutes > 0) return `${minutes} 分钟前`;
   return "刚刚";
+}
+
+export function formatRelativeTime(input: string | null | undefined, emptyLabel = "-"): string {
+  return formatRelativeTimeAt(input, new Date(), emptyLabel);
 }
