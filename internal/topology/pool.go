@@ -46,25 +46,27 @@ type GlobalNodePool struct {
 	onNodeLatencyChanged func(hash node.Hash, domain string) // fired on latency upserts and evictions
 
 	// Health config
-	maxLatencyTableEntries int
-	maxConsecutiveFailures func() int
-	latencyDecayWindow     func() time.Duration
-	latencyAuthorities     func() []string
+	maxLatencyTableEntries  int
+	maxConsecutiveFailures  func() int
+	latencyDecayWindow      func() time.Duration
+	latencyAuthorities      func() []string
+	maxNodeReferenceLatency func() time.Duration
 }
 
 // PoolConfig configures the GlobalNodePool.
 type PoolConfig struct {
-	SubLookup              func(subID string) *subscription.Subscription
-	GeoLookup              platform.GeoLookupFunc
-	OnNodeAdded            func(hash node.Hash)
-	OnNodeRemoved          func(hash node.Hash, entry *node.NodeEntry)
-	OnSubNodeChanged       func(subID string, hash node.Hash, added bool)
-	OnNodeDynamicChanged   func(hash node.Hash)
-	OnNodeLatencyChanged   func(hash node.Hash, domain string)
-	MaxLatencyTableEntries int
-	MaxConsecutiveFailures func() int
-	LatencyDecayWindow     func() time.Duration
-	LatencyAuthorities     func() []string
+	SubLookup               func(subID string) *subscription.Subscription
+	GeoLookup               platform.GeoLookupFunc
+	OnNodeAdded             func(hash node.Hash)
+	OnNodeRemoved           func(hash node.Hash, entry *node.NodeEntry)
+	OnSubNodeChanged        func(subID string, hash node.Hash, added bool)
+	OnNodeDynamicChanged    func(hash node.Hash)
+	OnNodeLatencyChanged    func(hash node.Hash, domain string)
+	MaxLatencyTableEntries  int
+	MaxConsecutiveFailures  func() int
+	LatencyDecayWindow      func() time.Duration
+	LatencyAuthorities      func() []string
+	MaxNodeReferenceLatency func() time.Duration
 }
 
 var (
@@ -82,20 +84,21 @@ func NewGlobalNodePool(cfg PoolConfig) *GlobalNodePool {
 	}
 
 	return &GlobalNodePool{
-		nodes:                  xsync.NewMap[node.Hash, *node.NodeEntry](),
-		subLookup:              cfg.SubLookup,
-		geoLookup:              cfg.GeoLookup,
-		onNodeAdded:            cfg.OnNodeAdded,
-		onNodeRemoved:          cfg.OnNodeRemoved,
-		onSubNodeChanged:       cfg.OnSubNodeChanged,
-		onNodeDynamicChanged:   cfg.OnNodeDynamicChanged,
-		onNodeLatencyChanged:   cfg.OnNodeLatencyChanged,
-		maxLatencyTableEntries: cfg.MaxLatencyTableEntries,
-		maxConsecutiveFailures: maxConsecutiveFailuresFn,
-		latencyDecayWindow:     cfg.LatencyDecayWindow,
-		latencyAuthorities:     cfg.LatencyAuthorities,
-		platformByID:           make(map[string]*platform.Platform),
-		platformByName:         make(map[string]*platform.Platform),
+		nodes:                   xsync.NewMap[node.Hash, *node.NodeEntry](),
+		subLookup:               cfg.SubLookup,
+		geoLookup:               cfg.GeoLookup,
+		onNodeAdded:             cfg.OnNodeAdded,
+		onNodeRemoved:           cfg.OnNodeRemoved,
+		onSubNodeChanged:        cfg.OnSubNodeChanged,
+		onNodeDynamicChanged:    cfg.OnNodeDynamicChanged,
+		onNodeLatencyChanged:    cfg.OnNodeLatencyChanged,
+		maxLatencyTableEntries:  cfg.MaxLatencyTableEntries,
+		maxConsecutiveFailures:  maxConsecutiveFailuresFn,
+		latencyDecayWindow:      cfg.LatencyDecayWindow,
+		latencyAuthorities:      cfg.LatencyAuthorities,
+		maxNodeReferenceLatency: cfg.MaxNodeReferenceLatency,
+		platformByID:            make(map[string]*platform.Platform),
+		platformByName:          make(map[string]*platform.Platform),
 	}
 }
 
@@ -186,6 +189,7 @@ func (p *GlobalNodePool) RegisterPlatform(plat *platform.Platform) {
 	if _, exists := p.platformByID[plat.ID]; exists {
 		return
 	}
+	p.configurePlatformRuntime(plat)
 	p.platformByID[plat.ID] = plat
 	if plat.Name != "" {
 		p.platformByName[plat.Name] = plat
@@ -217,6 +221,7 @@ func (p *GlobalNodePool) ReplacePlatform(next *platform.Platform) error {
 	if next == nil || next.ID == "" {
 		return ErrPlatformNotRegistered
 	}
+	p.configurePlatformRuntime(next)
 
 	// Build the new platform's view before publish so readers never observe
 	// an empty, not-yet-built view due only to replacement.
@@ -484,11 +489,19 @@ func (p *GlobalNodePool) RebuildAllPlatforms() {
 
 // RebuildPlatform triggers a full rebuild on a specific platform.
 func (p *GlobalNodePool) RebuildPlatform(plat *platform.Platform) {
+	p.configurePlatformRuntime(plat)
 	subLookup := p.MakeSubLookup()
 	poolRange := func(fn func(node.Hash, *node.NodeEntry) bool) {
 		p.nodes.Range(fn)
 	}
 	plat.FullRebuild(poolRange, subLookup, p.geoLookup)
+}
+
+func (p *GlobalNodePool) configurePlatformRuntime(plat *platform.Platform) {
+	if plat == nil {
+		return
+	}
+	plat.SetReferenceLatencyConfig(p.currentMaxNodeReferenceLatency, p.currentLatencyAuthorities)
 }
 
 // --- Health Management ---
@@ -623,7 +636,7 @@ func (p *GlobalNodePool) RecordLatency(hash node.Hash, rawTarget string, latency
 
 	// If the table transitioned from empty to non-empty, the node might
 	// now satisfy the HasLatency filter — notify platforms.
-	if wasEmpty {
+	if wasEmpty || p.referenceLatencyCapActive() {
 		p.notifyAllPlatformsDirty(hash)
 	}
 
@@ -692,9 +705,45 @@ func (p *GlobalNodePool) isAuthorityDomain(domain string) bool {
 	if domain == "" || p.latencyAuthorities == nil {
 		return false
 	}
-	authorities := p.latencyAuthorities()
+	authorities := p.currentLatencyAuthorities()
 	for _, authority := range authorities {
 		if strings.EqualFold(strings.TrimSpace(authority), domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *GlobalNodePool) currentLatencyAuthorities() []string {
+	if p.latencyAuthorities == nil {
+		return nil
+	}
+	return p.latencyAuthorities()
+}
+
+func (p *GlobalNodePool) currentMaxNodeReferenceLatency() time.Duration {
+	if p.maxNodeReferenceLatency == nil {
+		return 0
+	}
+	latency := p.maxNodeReferenceLatency()
+	if latency <= 0 {
+		return 0
+	}
+	return latency
+}
+
+func (p *GlobalNodePool) referenceLatencyCapActive() bool {
+	if p.currentMaxNodeReferenceLatency() > 0 {
+		return true
+	}
+
+	p.platMu.RLock()
+	defer p.platMu.RUnlock()
+	for _, plat := range p.platformByID {
+		if plat == nil || plat.MaxNodeReferenceLatencyNs == nil {
+			continue
+		}
+		if *plat.MaxNodeReferenceLatencyNs > 0 {
 			return true
 		}
 	}

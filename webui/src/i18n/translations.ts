@@ -103,6 +103,17 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "节点列表": "Node List",
   "连续失败": "Consecutive Failures",
   "参考延迟": "Reference Latency",
+  "最大参考延迟": "Max Reference Latency",
+  "最大节点参考延迟": "Max Node Reference Latency",
+  "最大节点参考延迟（可选）": "Max Node Reference Latency (Optional)",
+  "例如 1500ms，0s 表示不限制": "For example 1500ms; 0s means unlimited",
+  "留空继承系统默认，0s 表示不限制": "Leave blank to inherit the system default; 0s means unlimited",
+  "填写如 1500ms 或 2s，超过该参考延迟的节点不会进入此平台。":
+    "Use values like 1500ms or 2s. Nodes above this reference latency will not enter this platform.",
+  "超过该参考延迟的节点不会进入继承系统默认的平台路由池。":
+    "Nodes above this reference latency will not enter platforms inheriting the system default.",
+  "继承系统": "Inherit System",
+  "不限制": "Unlimited",
   "上次探测": "Last Probe",
   "上次检查": "Last Check",
   "上次更新": "Last Updated",

@@ -9,6 +9,7 @@ export type RuntimeConfig = {
   max_latency_test_interval: string;
   max_authority_latency_test_interval: string;
   max_egress_test_interval: string;
+  max_node_reference_latency: string;
   latency_test_url: string;
   latency_authorities: string[];
   p2c_latency_window: string;

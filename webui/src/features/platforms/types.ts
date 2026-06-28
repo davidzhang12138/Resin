@@ -6,6 +6,7 @@ export type Platform = {
   id: string;
   name: string;
   sticky_ttl: string;
+  max_node_reference_latency: string;
   regex_filters: string[];
   region_filters: string[];
   routable_node_count: number;
@@ -27,6 +28,7 @@ export type PageResponse<T> = {
 export type PlatformCreateInput = {
   name: string;
   sticky_ttl?: string;
+  max_node_reference_latency?: string;
   regex_filters?: string[];
   region_filters?: string[];
   reverse_proxy_miss_action?: PlatformMissAction;
@@ -39,6 +41,7 @@ export type PlatformCreateInput = {
 export type PlatformUpdateInput = {
   name?: string;
   sticky_ttl?: string;
+  max_node_reference_latency?: string;
   regex_filters?: string[];
   region_filters?: string[];
   reverse_proxy_miss_action?: PlatformMissAction;

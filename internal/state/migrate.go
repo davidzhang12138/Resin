@@ -19,13 +19,14 @@ const (
 	// Keep these version markers in sync with SQL files under migrations/state/.
 	// stateLegacyBaselineVersion must remain fixed to the highest migration
 	// version covered by compatibility detection for pre-migrate databases.
-	stateVersionBaseSchema                       = 1
-	stateVersionAddEmptyAccountBehavior          = 2
-	stateVersionAddFixedAccountHeader            = 3
-	stateVersionNormalizeMissAction              = 4
-	stateVersionAddIncrementalAliveNodes         = 5
-	stateVersionAddPassiveCircuitBreakerDisabled = 6
-	stateLegacyBaselineVersion                   = stateVersionAddFixedAccountHeader
+	stateVersionBaseSchema                         = 1
+	stateVersionAddEmptyAccountBehavior            = 2
+	stateVersionAddFixedAccountHeader              = 3
+	stateVersionNormalizeMissAction                = 4
+	stateVersionAddIncrementalAliveNodes           = 5
+	stateVersionAddPassiveCircuitBreakerDisabled   = 6
+	stateVersionAddPlatformMaxNodeReferenceLatency = 7
+	stateLegacyBaselineVersion                     = stateVersionAddFixedAccountHeader
 
 	stateBaseSchemaMigration = stateMigrationsPath + "/000001_state_base.up.sql"
 )
@@ -112,12 +113,18 @@ func prepareLegacyStateBaseline(db *sql.DB, driver migratedb.Driver) error {
 	if err != nil {
 		return err
 	}
+	hasMaxNodeReferenceLatency, err := hasTableColumn(db, "platforms", "max_node_reference_latency_ns")
+	if err != nil {
+		return err
+	}
 	hasIncrementalAliveNodes, err := hasTableColumn(db, "subscriptions", "incremental_alive_nodes")
 	if err != nil {
 		return err
 	}
 
 	switch {
+	case hasEmptyBehavior && hasFixedHeader && hasIncrementalAliveNodes && hasPassiveCircuitBreakerDisabled && hasMaxNodeReferenceLatency:
+		return setLegacyMigrationVersion(db, driver, stateVersionAddPlatformMaxNodeReferenceLatency)
 	case hasEmptyBehavior && hasFixedHeader && hasIncrementalAliveNodes && hasPassiveCircuitBreakerDisabled:
 		return setLegacyMigrationVersion(db, driver, stateVersionAddPassiveCircuitBreakerDisabled)
 	case hasEmptyBehavior && hasFixedHeader && hasIncrementalAliveNodes:

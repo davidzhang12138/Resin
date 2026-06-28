@@ -1300,12 +1300,17 @@ func convertClashProxyToNode(proxy map[string]any) (ParsedNode, bool) {
 		if alpn := getStringSlice(proxy, "alpn"); len(alpn) > 0 {
 			tls["alpn"] = alpn
 		}
-		applyUTLSFromValue(tls, firstNonEmpty(
-			getString(proxy, "fingerprint"),
+		utlsFingerprint := firstNonEmpty(
 			getString(proxy, "client-fingerprint"),
 			getString(proxy, "client_fingerprint"),
 			getString(proxy, "fp"),
-		))
+		)
+		if utlsFingerprint == "" {
+			if fingerprint := getString(proxy, "fingerprint"); !isSHA256HexFingerprint(fingerprint) {
+				utlsFingerprint = fingerprint
+			}
+		}
+		applyUTLSFromValue(tls, utlsFingerprint)
 		applyTLSCertificateFromClash(tls, proxy)
 		outbound := map[string]any{
 			"type":        "hysteria2",
@@ -3910,6 +3915,20 @@ func applyUTLSFromValue(tls map[string]any, rawFingerprint string) {
 		"enabled":     true,
 		"fingerprint": fingerprint,
 	}
+}
+
+func isSHA256HexFingerprint(value string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), ":", "")
+	if len(normalized) != 64 {
+		return false
+	}
+	for _, r := range normalized {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func applyTLSCertificateFromClash(tls map[string]any, proxy map[string]any) {

@@ -8,6 +8,7 @@ type Platform struct {
 	ID                               string `json:"id"`
 	Name                             string `json:"name"`
 	StickyTTLNs                      int64  `json:"sticky_ttl_ns"`
+	MaxNodeReferenceLatencyNs        *int64 `json:"max_node_reference_latency_ns"`
 	RegexFilters                     []string
 	RegionFilters                    []string
 	ReverseProxyMissAction           string `json:"reverse_proxy_miss_action"`

@@ -18,6 +18,9 @@ func TestNewDefaultRuntimeConfig(t *testing.T) {
 	if cfg.CacheFlushDirtyThreshold != 1000 {
 		t.Errorf("CacheFlushDirtyThreshold: got %d, want 1000", cfg.CacheFlushDirtyThreshold)
 	}
+	if time.Duration(cfg.MaxNodeReferenceLatency) != 0 {
+		t.Errorf("MaxNodeReferenceLatency: got %v, want 0", time.Duration(cfg.MaxNodeReferenceLatency))
+	}
 	if len(cfg.LatencyAuthorities) != 4 {
 		t.Errorf("LatencyAuthorities: got %d items, want 4", len(cfg.LatencyAuthorities))
 	}
@@ -99,6 +102,7 @@ func TestRuntimeConfig_JSONFieldNames(t *testing.T) {
 		"max_latency_test_interval",
 		"max_authority_latency_test_interval",
 		"max_egress_test_interval",
+		"max_node_reference_latency",
 		"latency_test_url",
 		"latency_authorities",
 		"p2c_latency_window",

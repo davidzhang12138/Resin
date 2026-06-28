@@ -334,14 +334,14 @@ func tdEWMAUpdate(
 	}
 }
 
-// AverageEWMAForDomainsMs returns the average EWMA latency in milliseconds
-// across domains that exist in the node's latency table.
-func AverageEWMAForDomainsMs(entry *NodeEntry, domains []string) (float64, bool) {
+// AverageEWMAForDomains returns the average EWMA latency across domains that
+// exist in the node's latency table.
+func AverageEWMAForDomains(entry *NodeEntry, domains []string) (time.Duration, bool) {
 	if entry == nil || entry.LatencyTable == nil || entry.LatencyTable.Size() == 0 || len(domains) == 0 {
 		return 0, false
 	}
 
-	var sumMs float64
+	var sum time.Duration
 	var count int
 	for _, domain := range domains {
 		domain = strings.TrimSpace(domain)
@@ -352,11 +352,21 @@ func AverageEWMAForDomainsMs(entry *NodeEntry, domains []string) (float64, bool)
 		if !ok {
 			continue
 		}
-		sumMs += float64(stats.Ewma.Milliseconds())
+		sum += stats.Ewma
 		count++
 	}
 	if count == 0 {
 		return 0, false
 	}
-	return sumMs / float64(count), true
+	return time.Duration(int64(sum) / int64(count)), true
+}
+
+// AverageEWMAForDomainsMs returns the average EWMA latency in milliseconds
+// across domains that exist in the node's latency table.
+func AverageEWMAForDomainsMs(entry *NodeEntry, domains []string) (float64, bool) {
+	avg, ok := AverageEWMAForDomains(entry, domains)
+	if !ok {
+		return 0, false
+	}
+	return float64(avg.Milliseconds()), true
 }

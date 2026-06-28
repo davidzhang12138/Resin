@@ -1024,6 +1024,56 @@ func TestAPIContract_PlatformPassiveCircuitBreaker(t *testing.T) {
 	assertErrorCode(t, rec, "INVALID_ARGUMENT")
 }
 
+func TestAPIContract_PlatformMaxNodeReferenceLatency(t *testing.T) {
+	srv, _, _ := newControlPlaneTestServer(t)
+
+	rec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/platforms", map[string]any{
+		"name":                       "latency-cap",
+		"max_node_reference_latency": "1500ms",
+	}, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status: got %d, want %d, body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	if body["max_node_reference_latency"] != "1.5s" {
+		t.Fatalf("create max_node_reference_latency: got %v, want 1.5s", body["max_node_reference_latency"])
+	}
+	platformID, _ := body["id"].(string)
+	if platformID == "" {
+		t.Fatalf("create platform missing id: body=%s", rec.Body.String())
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+platformID, map[string]any{
+		"max_node_reference_latency": "",
+	}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch inherit status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body = decodeJSONMap(t, rec)
+	if body["max_node_reference_latency"] != "" {
+		t.Fatalf("patch inherit max_node_reference_latency: got %v, want empty", body["max_node_reference_latency"])
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+platformID, map[string]any{
+		"max_node_reference_latency": "0s",
+	}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch disable status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body = decodeJSONMap(t, rec)
+	if body["max_node_reference_latency"] != "0s" {
+		t.Fatalf("patch disable max_node_reference_latency: got %v, want 0s", body["max_node_reference_latency"])
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+platformID, map[string]any{
+		"max_node_reference_latency": "-1s",
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("patch invalid status: got %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+}
+
 func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 	srv, _, runtimeCfg := newControlPlaneTestServer(t)
 
@@ -1032,6 +1082,7 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 		"reverse_proxy_log_req_headers_max_bytes": 2048,
 		"p2c_latency_window":                      "7m",
 		"cache_flush_interval":                    "30s",
+		"max_node_reference_latency":              "1500ms",
 	}, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch config status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
@@ -1050,6 +1101,9 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 	if body["cache_flush_interval"] != "30s" {
 		t.Fatalf("cache_flush_interval: got %v, want 30s", body["cache_flush_interval"])
 	}
+	if body["max_node_reference_latency"] != "1.5s" {
+		t.Fatalf("max_node_reference_latency: got %v, want 1.5s", body["max_node_reference_latency"])
+	}
 
 	snap := runtimeCfg.Load()
 	if !snap.RequestLogEnabled {
@@ -1057,6 +1111,9 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 	}
 	if snap.ReverseProxyLogReqHeadersMaxBytes != 2048 {
 		t.Fatalf("runtime pointer reverse_proxy_log_req_headers_max_bytes=%d, want 2048", snap.ReverseProxyLogReqHeadersMaxBytes)
+	}
+	if time.Duration(snap.MaxNodeReferenceLatency) != 1500*time.Millisecond {
+		t.Fatalf("runtime pointer max_node_reference_latency=%v, want 1.5s", time.Duration(snap.MaxNodeReferenceLatency))
 	}
 
 	cases := []struct {
@@ -1068,6 +1125,7 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 		{name: "removed field", body: map[string]any{"ephemeral_node_evict_delay": "1h"}},
 		{name: "null value", body: map[string]any{"request_log_enabled": nil}},
 		{name: "empty latency_test_url", body: map[string]any{"latency_test_url": ""}},
+		{name: "negative max_node_reference_latency", body: map[string]any{"max_node_reference_latency": "-1s"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

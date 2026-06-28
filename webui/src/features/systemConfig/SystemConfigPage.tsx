@@ -25,6 +25,7 @@ type RuntimeConfigForm = {
   max_latency_test_interval: string;
   max_authority_latency_test_interval: string;
   max_egress_test_interval: string;
+  max_node_reference_latency: string;
   latency_test_url: string;
   latency_authorities_raw: string;
   p2c_latency_window: string;
@@ -44,6 +45,7 @@ const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
   "max_latency_test_interval",
   "max_authority_latency_test_interval",
   "max_egress_test_interval",
+  "max_node_reference_latency",
   "latency_test_url",
   "latency_authorities",
   "p2c_latency_window",
@@ -63,6 +65,7 @@ const FIELD_LABELS: Record<keyof RuntimeConfig, string> = {
   max_latency_test_interval: "节点延迟最大测试间隔",
   max_authority_latency_test_interval: "权威域名最大测试间隔",
   max_egress_test_interval: "出口 IP 更新检查间隔",
+  max_node_reference_latency: "最大节点参考延迟",
   latency_test_url: "延迟测试目标 URL",
   latency_authorities: "延迟测试权威域名列表",
   p2c_latency_window: "P2C 延迟衰减窗口",
@@ -100,6 +103,7 @@ function configToForm(config: RuntimeConfig): RuntimeConfigForm {
     max_latency_test_interval: config.max_latency_test_interval,
     max_authority_latency_test_interval: config.max_authority_latency_test_interval,
     max_egress_test_interval: config.max_egress_test_interval,
+    max_node_reference_latency: config.max_node_reference_latency,
     latency_test_url: config.latency_test_url,
     latency_authorities_raw: config.latency_authorities.join("\n"),
     p2c_latency_window: config.p2c_latency_window,
@@ -174,6 +178,7 @@ function parseForm(form: RuntimeConfigForm): RuntimeConfig {
       form.max_authority_latency_test_interval,
     ),
     max_egress_test_interval: parseDurationField("出口 IP 更新检查间隔", form.max_egress_test_interval),
+    max_node_reference_latency: parseDurationField("最大节点参考延迟", form.max_node_reference_latency),
     latency_test_url: latencyURL,
     latency_authorities: parseAuthorities(form.latency_authorities_raw),
     p2c_latency_window: parseDurationField("P2C 延迟衰减窗口", form.p2c_latency_window),
@@ -627,6 +632,24 @@ export function SystemConfigPage() {
                       value={form.max_egress_test_interval}
                       onChange={(event) => setFormField("max_egress_test_interval", event.target.value)}
                     />
+                  </div>
+
+                  <div className="field-group">
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                      <label className="field-label" htmlFor="sys-max-node-reference-latency" style={{ margin: 0 }}>
+                        {t("最大节点参考延迟")}
+                      </label>
+                      {renderRestoreButton("max_node_reference_latency")}
+                    </div>
+                    <Input
+                      id="sys-max-node-reference-latency"
+                      placeholder={t("例如 1500ms，0s 表示不限制")}
+                      value={form.max_node_reference_latency}
+                      onChange={(event) => setFormField("max_node_reference_latency", event.target.value)}
+                    />
+                    <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      {t("超过该参考延迟的节点不会进入继承系统默认的平台路由池。")}
+                    </p>
                   </div>
 
                   <div className="field-group">

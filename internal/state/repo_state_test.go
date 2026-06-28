@@ -65,6 +65,9 @@ func TestMigrateStateDB_UpgradesLegacyPlatformsColumns(t *testing.T) {
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
 	}
+	if ok, err := hasTableColumn(db, "platforms", "max_node_reference_latency_ns"); err != nil || !ok {
+		t.Fatalf("expected migrated column max_node_reference_latency_ns, ok=%v err=%v", ok, err)
+	}
 }
 
 func TestMigrateStateDB_LegacyBaselineAdvancesToLatest(t *testing.T) {
@@ -106,14 +109,17 @@ func TestMigrateStateDB_LegacyBaselineAdvancesToLatest(t *testing.T) {
 	if dirty {
 		t.Fatalf("schema_migrations dirty=true")
 	}
-	if version != stateVersionAddPassiveCircuitBreakerDisabled {
-		t.Fatalf("schema_migrations version: got %d, want %d", version, stateVersionAddPassiveCircuitBreakerDisabled)
+	if version != stateVersionAddPlatformMaxNodeReferenceLatency {
+		t.Fatalf("schema_migrations version: got %d, want %d", version, stateVersionAddPlatformMaxNodeReferenceLatency)
 	}
 	if ok, err := hasTableColumn(db, "subscriptions", "incremental_alive_nodes"); err != nil || !ok {
 		t.Fatalf("expected migrated column subscriptions.incremental_alive_nodes, ok=%v err=%v", ok, err)
 	}
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
+	}
+	if ok, err := hasTableColumn(db, "platforms", "max_node_reference_latency_ns"); err != nil || !ok {
+		t.Fatalf("expected migrated column platforms.max_node_reference_latency_ns, ok=%v err=%v", ok, err)
 	}
 }
 
@@ -173,11 +179,14 @@ func TestMigrateStateDB_AddsIncrementalAliveNodesToLegacySubscriptions(t *testin
 	if dirty {
 		t.Fatalf("schema_migrations dirty=true")
 	}
-	if version != stateVersionAddPassiveCircuitBreakerDisabled {
-		t.Fatalf("schema_migrations version: got %d, want %d", version, stateVersionAddPassiveCircuitBreakerDisabled)
+	if version != stateVersionAddPlatformMaxNodeReferenceLatency {
+		t.Fatalf("schema_migrations version: got %d, want %d", version, stateVersionAddPlatformMaxNodeReferenceLatency)
 	}
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
+	}
+	if ok, err := hasTableColumn(db, "platforms", "max_node_reference_latency_ns"); err != nil || !ok {
+		t.Fatalf("expected migrated column platforms.max_node_reference_latency_ns, ok=%v err=%v", ok, err)
 	}
 }
 
@@ -248,14 +257,17 @@ func TestMigrateStateDB_NormalizesLegacyRandomMissAction(t *testing.T) {
 	if dirty {
 		t.Fatalf("schema_migrations dirty=true")
 	}
-	if version != stateVersionAddPassiveCircuitBreakerDisabled {
-		t.Fatalf("schema_migrations version: got %d, want %d", version, stateVersionAddPassiveCircuitBreakerDisabled)
+	if version != stateVersionAddPlatformMaxNodeReferenceLatency {
+		t.Fatalf("schema_migrations version: got %d, want %d", version, stateVersionAddPlatformMaxNodeReferenceLatency)
 	}
 	if ok, err := hasTableColumn(db, "subscriptions", "incremental_alive_nodes"); err != nil || !ok {
 		t.Fatalf("expected migrated column subscriptions.incremental_alive_nodes, ok=%v err=%v", ok, err)
 	}
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
+	}
+	if ok, err := hasTableColumn(db, "platforms", "max_node_reference_latency_ns"); err != nil || !ok {
+		t.Fatalf("expected migrated column platforms.max_node_reference_latency_ns, ok=%v err=%v", ok, err)
 	}
 }
 
@@ -312,11 +324,13 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	repo := newTestStateRepo(t)
 	now := time.Now().UnixNano()
+	latencyCap := int64(1500 * time.Millisecond)
 
 	p := model.Platform{
 		ID: "plat-1", Name: "Default", StickyTTLNs: 1000,
 		RegexFilters: []string{}, RegionFilters: []string{},
 		ReverseProxyMissAction: "TREAT_AS_EMPTY", AllocationPolicy: "BALANCED",
+		MaxNodeReferenceLatencyNs:     &latencyCap,
 		PassiveCircuitBreakerDisabled: true,
 		UpdatedAtNs:                   now,
 	}
@@ -341,6 +355,9 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	if !got.PassiveCircuitBreakerDisabled {
 		t.Fatal("expected passive_circuit_breaker_disabled to round-trip true")
 	}
+	if got.MaxNodeReferenceLatencyNs == nil || *got.MaxNodeReferenceLatencyNs != latencyCap {
+		t.Fatalf("expected max_node_reference_latency_ns to round-trip %d, got %v", latencyCap, got.MaxNodeReferenceLatencyNs)
+	}
 
 	// List.
 	list, err := repo.ListPlatforms()
@@ -354,6 +371,7 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	// Idempotent upsert (update same ID).
 	p.Name = "Default-Renamed"
 	p.PassiveCircuitBreakerDisabled = false
+	p.MaxNodeReferenceLatencyNs = nil
 	if err := repo.UpsertPlatform(p); err != nil {
 		t.Fatal(err)
 	}
@@ -366,6 +384,9 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	}
 	if list[0].PassiveCircuitBreakerDisabled {
 		t.Fatal("expected passive_circuit_breaker_disabled to update to false")
+	}
+	if list[0].MaxNodeReferenceLatencyNs != nil {
+		t.Fatalf("expected max_node_reference_latency_ns to update to nil, got %v", list[0].MaxNodeReferenceLatencyNs)
 	}
 
 	// Delete.

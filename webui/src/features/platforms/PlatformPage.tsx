@@ -262,6 +262,20 @@ export function PlatformPage() {
               </div>
 
               <div className="field-group">
+                <label className="field-label" htmlFor="create-max-node-reference-latency">
+                  {t("最大节点参考延迟（可选）")}
+                </label>
+                <Input
+                  id="create-max-node-reference-latency"
+                  placeholder={t("留空继承系统默认，0s 表示不限制")}
+                  {...createForm.register("max_node_reference_latency")}
+                />
+                <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                  {t("填写如 1500ms 或 2s，超过该参考延迟的节点不会进入此平台。")}
+                </p>
+              </div>
+
+              <div className="field-group">
                 <label className="field-label" htmlFor="create-miss-action">
                   {t("反向代理账号解析出错策略")}
                 </label>

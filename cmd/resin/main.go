@@ -266,6 +266,9 @@ func newTopologyRuntime(
 		LatencyAuthorities: func() []string {
 			return runtimeConfigSnapshot(runtimeCfg).LatencyAuthorities
 		},
+		MaxNodeReferenceLatency: func() time.Duration {
+			return time.Duration(runtimeConfigSnapshot(runtimeCfg).MaxNodeReferenceLatency)
+		},
 	})
 	log.Println("Topology: GlobalNodePool initialized")
 
