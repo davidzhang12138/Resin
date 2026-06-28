@@ -463,9 +463,15 @@ async function fetchPlatformSnapshotNodeLatency(platformId: string): Promise<Sna
   return normalizeNodeLatencySnapshot(data);
 }
 
+type RechartsTooltipEntry = {
+  dataKey?: string | number;
+  value?: number | string | Array<number | string>;
+  payload?: HistogramBarPoint;
+};
+
 type TrendTooltipContentProps = {
   active?: boolean;
-  payload?: any[];
+  payload?: RechartsTooltipEntry[];
   label?: string;
   lines: TrendLineDefinition[];
   valueFormatter: (value: number) => string;
@@ -500,7 +506,12 @@ function TrendTooltipContent({ active, payload, label, lines, valueFormatter }: 
   );
 }
 
-function HistogramTooltipContent({ active, payload }: any) {
+type HistogramTooltipContentProps = {
+  active?: boolean;
+  payload?: RechartsTooltipEntry[];
+};
+
+function HistogramTooltipContent({ active, payload }: HistogramTooltipContentProps) {
   const { t } = useI18n();
 
   if (!active || !payload?.length) {
