@@ -2,7 +2,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import { Link, useParams } from "react-router-dom";
 import { createColumnHelper } from "@tanstack/react-table";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontal, RefreshCw } from "lucide-react";
+import { AlertTriangle, MoreHorizontal, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { DataTable } from "../../components/ui/DataTable";
@@ -11,6 +11,7 @@ import { OffsetPagination } from "../../components/ui/OffsetPagination";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
 import { useI18n } from "../../i18n";
+import { formatApiErrorMessage } from "../../lib/error-message";
 import { formatRelativeTimeAt } from "../../lib/time";
 import { deleteLease, listPlatformLeases } from "./api";
 import type { LeaseResponse } from "./types";
@@ -25,6 +26,12 @@ const NODE_FILTER_ITEM_STYLE: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "0.25rem",
+};
+
+const NODE_FILTER_CONTROL_STYLE: CSSProperties = {
+  width: "100%",
+  padding: "4px 8px",
+  fontSize: "0.875rem",
 };
 
 // Module-level impure read so React Compiler's purity rule does not flag
@@ -250,6 +257,7 @@ export function PlatformLeasesPage() {
                 value={accountKeyword}
                 onChange={(e) => { setAccountKeyword(e.target.value); setPage(0); setSelected(new Set()); }}
                 placeholder={t("模糊搜索")}
+                style={NODE_FILTER_CONTROL_STYLE}
               />
             </div>
 
@@ -259,6 +267,7 @@ export function PlatformLeasesPage() {
                 value={egressFilter}
                 onChange={(e) => setEgressFilter(e.target.value)}
                 placeholder={t("本地过滤")}
+                style={NODE_FILTER_CONTROL_STYLE}
               />
             </div>
 
@@ -271,23 +280,37 @@ export function PlatformLeasesPage() {
         </div>
       </Card>
 
-      {items.length ? (
-        <Card className="nodes-table-card">
-          <DataTable data={items} columns={columns} getRowId={(l) => l.account} />
-        </Card>
-      ) : (
-        <Card><p className="platform-monitor-kpi-sub">{leasesQuery.isLoading ? t("加载中…") : t("租约列表为空")}</p></Card>
-      )}
+      <Card className="nodes-table-card platform-cards-container subscriptions-table-card">
+        {leasesQuery.isLoading ? <p className="muted">{t("加载中…")}</p> : null}
 
-      <OffsetPagination
-        page={page}
-        totalPages={totalPages}
-        totalItems={pageData.total}
-        pageSize={pageSize}
-        pageSizeOptions={PAGE_SIZE_OPTIONS}
-        onPageChange={(p) => { setPage(p); setSelected(new Set()); }}
-        onPageSizeChange={(s) => { setPageSize(s); setPage(0); setSelected(new Set()); }}
-      />
+        {leasesQuery.isError ? (
+          <div className="callout callout-error">
+            <AlertTriangle size={14} />
+            <span>{formatApiErrorMessage(leasesQuery.error, t)}</span>
+          </div>
+        ) : null}
+
+        {!leasesQuery.isLoading && !items.length ? (
+          <div className="empty-box">
+            <Sparkles size={16} />
+            <p>{t("租约列表为空")}</p>
+          </div>
+        ) : null}
+
+        {items.length ? (
+          <DataTable data={items} columns={columns} getRowId={(l) => l.account} />
+        ) : null}
+
+        <OffsetPagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={pageData.total}
+          pageSize={pageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          onPageChange={(p) => { setPage(p); setSelected(new Set()); }}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(0); setSelected(new Set()); }}
+        />
+      </Card>
 
       {reassignFor ? (
         <ReassignLeaseDialog
