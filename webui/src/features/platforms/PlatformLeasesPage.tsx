@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Link, useParams } from "react-router-dom";
 import { createColumnHelper } from "@tanstack/react-table";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +18,14 @@ import { ReassignLeaseDialog } from "./ReassignLeaseDialog";
 
 const PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+
+const NODE_FILTER_ITEM_STYLE: CSSProperties = {
+  flex: "1 1 120px",
+  minWidth: "80px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.25rem",
+};
 
 // Module-level impure read so React Compiler's purity rule does not flag
 // Date.now() inside render/callback bodies.
@@ -206,36 +214,67 @@ export function PlatformLeasesPage() {
   ];
 
   return (
-    <div className="page-container">
-      <div className="page-header">
+    <section className="nodes-page">
+      <header className="module-header">
         <div>
           <h2>{t("活跃租约")}</h2>
-          <Link to={`/platforms/${platformId}`} className="platform-monitor-kpi-sub">{t("返回平台详情")}</Link>
+          <p className="module-description">
+            <Link to={`/platforms/${platformId}`}>{t("返回平台详情")}</Link>
+          </p>
         </div>
         <Button size="sm" variant="secondary" onClick={refresh} disabled={leasesQuery.isFetching}>
           <RefreshCw size={16} className={leasesQuery.isFetching ? "spin" : undefined} />
           {t("刷新")}
         </Button>
-      </div>
+      </header>
 
-      <Card className="filter-bar">
-        <div className="filter-item">
-          <label>{t("账号")}</label>
-          <Input value={accountKeyword} onChange={(e) => { setAccountKeyword(e.target.value); setPage(0); setSelected(new Set()); }} placeholder={t("模糊搜索")} />
-        </div>
-        <div className="filter-item">
-          <label>{t("出口 IP")}</label>
-          <Input value={egressFilter} onChange={(e) => setEgressFilter(e.target.value)} placeholder={t("本地过滤")} />
-        </div>
-        <div className="filter-item">
-          <Button size="sm" variant="secondary" disabled={selected.size === 0} onClick={bulkClear}>
-            {t("批量清除")} ({selected.size})
-          </Button>
+      <Card className="filter-card platform-list-card platform-directory-card">
+        <div className="list-card-header">
+          <div>
+            <h3>{t("租约列表")}</h3>
+            <p>{t("共 {{total}} 条活跃租约", { total: pageData.total })}</p>
+          </div>
+
+          <div
+            className="nodes-inline-filters"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+              alignItems: "flex-end",
+            }}
+          >
+            <div style={NODE_FILTER_ITEM_STYLE}>
+              <label style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{t("账号")}</label>
+              <Input
+                value={accountKeyword}
+                onChange={(e) => { setAccountKeyword(e.target.value); setPage(0); setSelected(new Set()); }}
+                placeholder={t("模糊搜索")}
+              />
+            </div>
+
+            <div style={NODE_FILTER_ITEM_STYLE}>
+              <label style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{t("出口 IP")}</label>
+              <Input
+                value={egressFilter}
+                onChange={(e) => setEgressFilter(e.target.value)}
+                placeholder={t("本地过滤")}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.125rem", marginLeft: "auto" }}>
+              <Button size="sm" variant="secondary" disabled={selected.size === 0} onClick={bulkClear}>
+                {t("批量清除")} ({selected.size})
+              </Button>
+            </div>
+          </div>
         </div>
       </Card>
 
       {items.length ? (
-        <DataTable data={items} columns={columns} getRowId={(l) => l.account} />
+        <Card className="nodes-table-card">
+          <DataTable data={items} columns={columns} getRowId={(l) => l.account} />
+        </Card>
       ) : (
         <Card><p className="platform-monitor-kpi-sub">{leasesQuery.isLoading ? t("加载中…") : t("租约列表为空")}</p></Card>
       )}
@@ -261,6 +300,6 @@ export function PlatformLeasesPage() {
       ) : null}
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-    </div>
+    </section>
   );
 }

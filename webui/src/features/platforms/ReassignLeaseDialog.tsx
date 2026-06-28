@@ -56,7 +56,6 @@ export function ReassignLeaseDialog({ platformId, lease, onClose, onReassigned, 
       onClose();
     } catch (err) {
       showToast("error", t("重指租约失败"));
-      // eslint-disable-next-line no-console
       console.error(err);
     } finally {
       setSubmitting(false);
