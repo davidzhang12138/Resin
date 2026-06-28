@@ -35,13 +35,13 @@ export function ReassignLeaseDialog({ platformId, lease, onClose, onReassigned, 
       listNodes({ platform_id: platformId, has_outbound: true, limit: 1000, offset: 0 }),
     staleTime: 30_000,
   });
-  const nodes: NodeSummary[] = nodesQuery.data?.items ?? [];
 
   const filtered = useMemo(() => {
+    const all: NodeSummary[] = nodesQuery.data?.items ?? [];
     const kw = keyword.trim().toLowerCase();
-    if (!kw) return nodes;
-    return nodes.filter((n) => nodeDisplayTag(n).toLowerCase().includes(kw));
-  }, [nodes, keyword]);
+    if (!kw) return all;
+    return all.filter((n) => nodeDisplayTag(n).toLowerCase().includes(kw));
+  }, [nodesQuery.data, keyword]);
 
   const confirm = async () => {
     if (!selectedHash || submitting) return;
