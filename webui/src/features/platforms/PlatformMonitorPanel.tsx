@@ -868,9 +868,12 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
             <p className="platform-monitor-kpi-value">{formatCount(latestActiveLeases)}</p>
             <p className="platform-monitor-kpi-sub">{t("当前实时值")}</p>
           </div>
-          <Link to={`/platforms/${platform.id}/leases`} className="platform-monitor-kpi-link">
+          <Link
+            to={`/platforms/${encodeURIComponent(platform.id)}?tab=ops#platform-lease-management`}
+            className="platform-monitor-kpi-link"
+          >
             <Link2 size={14} />
-            <span>{t("活跃租约")}</span>
+            <span>{t("租约管理")}</span>
           </Link>
         </Card>
 

@@ -51,7 +51,7 @@ export type PlatformUpdateInput = {
   passive_circuit_breaker_disabled?: boolean;
 };
 
-export type LeaseResponse = {
+export type PlatformLease = {
   platform_id: string;
   account: string;
   node_hash: string;
@@ -59,6 +59,20 @@ export type LeaseResponse = {
   egress_ip: string;
   expiry: string;
   last_accessed: string;
+};
+
+export type LeaseResponse = PlatformLease;
+
+export type PlatformLeaseSortBy = "account" | "expiry" | "last_accessed";
+export type SortOrder = "asc" | "desc";
+
+export type ListPlatformLeasesInput = {
+  limit?: number;
+  offset?: number;
+  account?: string;
+  fuzzy?: boolean;
+  sort_by?: PlatformLeaseSortBy;
+  sort_order?: SortOrder;
 };
 
 export type ReassignLeaseInput = {
