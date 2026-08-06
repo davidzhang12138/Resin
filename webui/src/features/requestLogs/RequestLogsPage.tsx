@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createColumnHelper } from "@tanstack/react-table";
 import { AlertTriangle, Eraser, RefreshCw, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
@@ -19,7 +19,7 @@ import { formatApiErrorMessage } from "../../lib/error-message";
 import { formatDateTime } from "../../lib/time";
 import { getSystemConfig } from "../systemConfig/api";
 import { getRequestLog, getRequestLogPayloads, listRequestLogs } from "./api";
-import type { RequestLogItem, RequestLogListFilters } from "./types";
+import type { RequestLogItem, RequestLogListFilters, RequestLogPayloads } from "./types";
 
 type BoolFilter = "all" | "true" | "false";
 type ProxyTypeFilter = "all" | "1" | "2" | "3";
@@ -37,6 +37,8 @@ type FilterDraft = {
   limit: number;
 };
 
+type DebouncedTextFilters = Pick<FilterDraft, "platform_name" | "account" | "target_host" | "egress_ip" | "http_status">;
+
 const defaultFilters: FilterDraft = {
   from_local: "",
   to_local: "",
@@ -49,6 +51,7 @@ const defaultFilters: FilterDraft = {
   http_status: "",
   limit: 100,
 };
+const FILTER_DEBOUNCE_MS = 100;
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500, 1000, 2000] as const;
 const REQUEST_LOGS_FORWARD_BADGE_CLASS = "request-logs-proxy-badge-forward";
 const REQUEST_LOGS_REVERSE_BADGE_CLASS = "request-logs-proxy-badge-reverse";
@@ -56,7 +59,14 @@ const REQUEST_LOGS_SOCKS_BADGE_CLASS = "request-logs-proxy-badge-socks";
 
 const PAYLOAD_TABS = ["request", "response"] as const;
 type PayloadTab = (typeof PAYLOAD_TABS)[number];
+type DecodedPayloadData = { headers: string; body: string };
+type DecodedPayloadState = {
+  source: RequestLogPayloads;
+  tab: PayloadTab;
+  data: DecodedPayloadData;
+};
 const EMPTY_LOGS: RequestLogItem[] = [];
+const EMPTY_PAYLOAD_DATA: DecodedPayloadData = { headers: "", body: "" };
 const BASE64_DECODE_FAILED = "[Base64 解码失败]";
 const UNSUPPORTED_CONTENT_ENCODING_PREFIX = "暂不支持的 Content-Encoding: ";
 const CONTENT_ENCODING_DECODE_FAILED_PREFIX = "Content-Encoding=";
@@ -288,6 +298,16 @@ function buildActiveFilters(draft: FilterDraft): Omit<RequestLogListFilters, "cu
   };
 }
 
+function pickDebouncedTextFilters(filters: FilterDraft): DebouncedTextFilters {
+  return {
+    platform_name: filters.platform_name,
+    account: filters.account,
+    target_host: filters.target_host,
+    egress_ip: filters.egress_ip,
+    http_status: filters.http_status,
+  };
+}
+
 function proxyTypeLabel(proxyType: number): string {
   if (proxyType === 1) {
     return "HTTP 正向代理";
@@ -348,16 +368,15 @@ function splitDateTime(input: string): { date: string; time: string } {
 export function RequestLogsPage() {
   const { t } = useI18n();
   const [filters, setFilters] = useState<FilterDraft>(defaultFilters);
+  const [debouncedTextFilters, setDebouncedTextFilters] = useState<DebouncedTextFilters>(() =>
+    pickDebouncedTextFilters(defaultFilters),
+  );
   const [cursorStack, setCursorStack] = useState<string[]>([""]);
   const [pageIndex, setPageIndex] = useState(0);
   const [selectedLogId, setSelectedLogId] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [payloadTab, setPayloadTab] = useState<PayloadTab>("request");
-  const [payloadData, setPayloadData] = useState<{ headers: string; body: string }>({
-    headers: "",
-    body: "",
-  });
-  const [payloadDecodePending, setPayloadDecodePending] = useState(false);
+  const [decodedPayload, setDecodedPayload] = useState<DecodedPayloadState | null>(null);
   const { toasts, dismissToast } = useToast();
 
   const configQuery = useQuery({
@@ -366,7 +385,38 @@ export function RequestLogsPage() {
     staleTime: 60_000,
   });
 
-  const activeFilters = useMemo(() => buildActiveFilters(filters), [filters]);
+  useEffect(() => {
+    const timeoutID = window.setTimeout(() => {
+      setDebouncedTextFilters({
+        platform_name: filters.platform_name,
+        account: filters.account,
+        target_host: filters.target_host,
+        egress_ip: filters.egress_ip,
+        http_status: filters.http_status,
+      });
+    }, FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeoutID);
+  }, [filters.account, filters.egress_ip, filters.http_status, filters.platform_name, filters.target_host]);
+
+  const queryFilters = useMemo<FilterDraft>(
+    () => ({
+      from_local: filters.from_local,
+      to_local: filters.to_local,
+      proxy_type: filters.proxy_type,
+      net_ok: filters.net_ok,
+      limit: filters.limit,
+      ...debouncedTextFilters,
+    }),
+    [
+      debouncedTextFilters,
+      filters.from_local,
+      filters.limit,
+      filters.net_ok,
+      filters.proxy_type,
+      filters.to_local,
+    ],
+  );
+  const activeFilters = useMemo(() => buildActiveFilters(queryFilters), [queryFilters]);
   const cursor = cursorStack[pageIndex] || "";
 
   const rangeInvalid = useMemo(() => {
@@ -421,6 +471,15 @@ export function RequestLogsPage() {
     staleTime: 30_000,
   });
 
+  const currentDecodedPayload =
+    payloadQuery.data &&
+    decodedPayload?.source === payloadQuery.data &&
+    decodedPayload.tab === payloadTab
+      ? decodedPayload
+      : null;
+  const payloadData = currentDecodedPayload?.data ?? EMPTY_PAYLOAD_DATA;
+  const payloadDecodePending = Boolean(payloadQuery.data && !currentDecodedPayload);
+
   useEffect(() => {
     if (!drawerVisible) {
       return;
@@ -447,6 +506,7 @@ export function RequestLogsPage() {
 
   const resetFilters = () => {
     setFilters(defaultFilters);
+    setDebouncedTextFilters(pickDebouncedTextFilters(defaultFilters));
     setCursorStack([""]);
     setPageIndex(0);
     setSelectedLogId("");
@@ -496,15 +556,10 @@ export function RequestLogsPage() {
     const payload = payloadQuery.data;
 
     if (!payload) {
-      setPayloadData({ headers: "", body: "" });
-      setPayloadDecodePending(false);
       return () => {
         cancelled = true;
       };
     }
-
-    setPayloadData({ headers: "", body: "" });
-    setPayloadDecodePending(true);
 
     const decodePayload = async () => {
       const [headersBase64, bodyBase64] =
@@ -520,8 +575,7 @@ export function RequestLogsPage() {
       if (cancelled) {
         return;
       }
-      setPayloadData({ headers, body });
-      setPayloadDecodePending(false);
+      setDecodedPayload({ source: payload, tab: payloadTab, data: { headers, body } });
     };
 
     void decodePayload().catch((error: unknown) => {
@@ -529,8 +583,11 @@ export function RequestLogsPage() {
         return;
       }
       const message = error instanceof Error ? translatePayloadDecodeErrorMessage(error.message, t) : t("未知错误");
-      setPayloadData({ headers: "", body: t("[Body 解码失败：{{message}}]", { message }) });
-      setPayloadDecodePending(false);
+      setDecodedPayload({
+        source: payload,
+        tab: payloadTab,
+        data: { headers: "", body: t("[Body 解码失败：{{message}}]", { message }) },
+      });
     });
 
     return () => {
@@ -539,23 +596,26 @@ export function RequestLogsPage() {
   }, [payloadQuery.data, payloadTab, t]);
 
   const hasMore = Boolean(logsQuery.data?.has_more && logsQuery.data?.next_cursor);
-  const renderProxyTypeBadge = (proxyType: number, context: "table" | "drawer" = "table") => {
-    const className = proxyTypeBadgeClassName(proxyType);
-    if (!className) {
-      return t(proxyTypeLabel(proxyType));
-    }
+  const renderProxyTypeBadge = useCallback(
+    (proxyType: number, context: "table" | "drawer" = "table") => {
+      const className = proxyTypeBadgeClassName(proxyType);
+      if (!className) {
+        return t(proxyTypeLabel(proxyType));
+      }
 
-    let label = "";
-    if (proxyType === 1) {
-      label = context === "drawer" ? t("HTTP") : t("正向");
-    } else if (proxyType === 2) {
-      label = t("反向");
-    } else {
-      label = t("SOCKS5");
-    }
+      let label = "";
+      if (proxyType === 1) {
+        label = context === "drawer" ? t("HTTP") : t("正向");
+      } else if (proxyType === 2) {
+        label = t("反向");
+      } else {
+        label = t("SOCKS5");
+      }
 
-    return <Badge className={className}>{label}</Badge>;
-  };
+      return <Badge className={className}>{label}</Badge>;
+    },
+    [t],
+  );
 
   const col = useMemo(() => createColumnHelper<RequestLogItem>(), []);
 
@@ -670,7 +730,7 @@ export function RequestLogsPage() {
         },
       }),
     ],
-    [col, t]
+    [col, renderProxyTypeBadge, t]
   );
 
   return (
@@ -878,6 +938,7 @@ export function RequestLogsPage() {
             onRowClick={(log) => openDrawer(log.id)}
             selectedRowId={drawerVisible ? detailLogId : undefined}
             getRowId={(log) => log.id}
+            className="data-table-logs"
             wrapClassName="data-table-wrap-logs"
           />
         ) : null}

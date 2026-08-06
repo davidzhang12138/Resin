@@ -2021,9 +2021,13 @@ func parseProxyURI(uri string) (ParsedNode, bool) {
 		return ParsedNode{}, false
 	}
 	tag := decodeTag(u.Fragment)
+	defaultTagProto := nodeType
+	if scheme == "https" {
+		defaultTagProto = scheme
+	}
 	outbound := map[string]any{
 		"type":        nodeType,
-		"tag":         defaultTag(tag, nodeType, server, port),
+		"tag":         defaultTag(tag, defaultTagProto, server, port),
 		"server":      server,
 		"server_port": port,
 	}

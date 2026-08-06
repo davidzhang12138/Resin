@@ -19,6 +19,11 @@ const (
 	// Keep these version markers in sync with SQL files under migrations/state/.
 	// stateLegacyBaselineVersion must remain fixed to the highest migration
 	// version covered by compatibility detection for pre-migrate databases.
+	//
+	// NOTE: 7 is our local migration (max_node_reference_latency). The upstream
+	// migration series (endpoints=7, enabled=8, regex rules=9) collides with it,
+	// so upstream migrations are renumbered to 10/11/12 on this fork. See the
+	// 000010_/000011_/000012_ SQL files under migrations/state/.
 	stateVersionBaseSchema                         = 1
 	stateVersionAddEmptyAccountBehavior            = 2
 	stateVersionAddFixedAccountHeader              = 3
@@ -26,6 +31,12 @@ const (
 	stateVersionAddIncrementalAliveNodes           = 5
 	stateVersionAddPassiveCircuitBreakerDisabled   = 6
 	stateVersionAddPlatformMaxNodeReferenceLatency = 7
+	stateUpstreamVersionAddEndpointEnabled         = 8
+	stateUpstreamVersionPlatformRegexFilterRules   = 9
+	stateVersionAddEndpoints                       = 10
+	stateVersionAddEndpointEnabled                 = 11
+	stateVersionPlatformRegexFilterRules           = 12
+	stateLatestVersion                             = stateVersionPlatformRegexFilterRules
 	stateLegacyBaselineVersion                     = stateVersionAddFixedAccountHeader
 
 	stateBaseSchemaMigration = stateMigrationsPath + "/000001_state_base.up.sql"
@@ -38,7 +49,7 @@ type preMigrateHook func(db *sql.DB, driver migratedb.Driver) error
 
 // MigrateStateDB applies state.db migrations.
 func MigrateStateDB(db *sql.DB) error {
-	return migrateSQLiteDB(db, stateMigrationsPath, migrateDefaultTable, prepareLegacyStateBaseline)
+	return migrateSQLiteDB(db, stateMigrationsPath, migrateDefaultTable, prepareStateMigrationCompatibility)
 }
 
 // MigrateCacheDB applies cache.db migrations.
@@ -80,6 +91,54 @@ func migrateSQLiteDB(db *sql.DB, fsPath, migrationsTable string, preHook preMigr
 		return fmt.Errorf("migrate %s: up: %w", fsPath, err)
 	}
 	return nil
+}
+
+// prepareStateMigrationCompatibility handles databases produced by the
+// upstream migration series before it was renumbered on this fork. Version 8
+// already contains endpoints.enabled, while version 9 also already contains
+// the regex-filter data conversion. Letting the fork's 000011/000012
+// migrations run again would either fail on the existing column or transform
+// the regex prefixes twice.
+func prepareStateMigrationCompatibility(db *sql.DB, driver migratedb.Driver) error {
+	if err := prepareLegacyStateBaseline(db, driver); err != nil {
+		return err
+	}
+
+	version, dirty, hasVersion, err := readMigrationState(db, migrateDefaultTable)
+	if err != nil {
+		return err
+	}
+	if !hasVersion || dirty {
+		return nil
+	}
+
+	hasEndpoints, err := hasTable(db, "endpoints")
+	if err != nil {
+		return err
+	}
+	if !hasEndpoints {
+		return nil
+	}
+	hasEnabled, err := hasTableColumn(db, "endpoints", "enabled")
+	if err != nil {
+		return err
+	}
+	if !hasEnabled {
+		return nil
+	}
+
+	switch version {
+	case stateUpstreamVersionAddEndpointEnabled:
+		// Upstream 000008 added endpoints.enabled. The fork's 000012 still
+		// needs to convert legacy regex filters, so continue from 000011.
+		return setMigrationVersion(driver, stateVersionAddEndpointEnabled)
+	case stateUpstreamVersionPlatformRegexFilterRules:
+		// Upstream 000009 already converted regex filters. Skip the fork's
+		// equivalent migration to avoid adding '*' prefixes a second time.
+		return setMigrationVersion(driver, stateLatestVersion)
+	default:
+		return nil
+	}
 }
 
 // prepareLegacyStateBaseline aligns migration version metadata for databases
@@ -151,11 +210,23 @@ func prepareLegacyStateBaseline(db *sql.DB, driver migratedb.Driver) error {
 }
 
 func hasMigrationVersion(db *sql.DB, table string) (bool, error) {
-	var count int
-	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count); err != nil {
-		return false, fmt.Errorf("read %s: %w", table, err)
+	_, _, hasVersion, err := readMigrationState(db, table)
+	return hasVersion, err
+}
+
+func readMigrationState(db *sql.DB, table string) (version int, dirty, hasVersion bool, err error) {
+	var rawVersion uint64
+	err = db.QueryRow(fmt.Sprintf("SELECT version, dirty FROM %s LIMIT 1", table)).Scan(&rawVersion, &dirty)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, false, nil
 	}
-	return count > 0, nil
+	if err != nil {
+		return 0, false, false, fmt.Errorf("read %s: %w", table, err)
+	}
+	if rawVersion > uint64(^uint(0)>>1) {
+		return 0, false, false, fmt.Errorf("read %s: migration version %d overflows int", table, rawVersion)
+	}
+	return int(rawVersion), dirty, true, nil
 }
 
 func setMigrationVersion(driver migratedb.Driver, version int) error {
