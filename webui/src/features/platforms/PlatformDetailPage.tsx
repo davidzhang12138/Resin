@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { AlertTriangle, ArrowLeft, Info, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Info, RefreshCw, Search, Shuffle, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -46,6 +46,7 @@ import {
 } from "./formModel";
 import { PlatformAccessPanel } from "./PlatformAccessPanel";
 import { PlatformMonitorPanel } from "./PlatformMonitorPanel";
+import { ReassignLeaseDialog } from "./ReassignLeaseDialog";
 import type { PlatformLease } from "./types";
 
 type PlatformDetailTab = "monitor" | "access" | "config" | "ops";
@@ -71,6 +72,7 @@ export function PlatformDetailPage() {
   const [leasePageSize, setLeasePageSize] = useState<number>(LEASE_PAGE_SIZE_OPTIONS[0]);
   const [leaseSearch, setLeaseSearch] = useState("");
   const [debouncedLeaseSearch, setDebouncedLeaseSearch] = useState("");
+  const [reassignFor, setReassignFor] = useState<PlatformLease | null>(null);
   const { toasts, showToast, dismissToast } = useToast();
   const queryClient = useQueryClient();
   const formatPlatformMutationError = (error: unknown) => {
@@ -312,6 +314,16 @@ export function PlatformDetailPage() {
     await releaseLeaseMutation.mutateAsync(lease);
   };
 
+  const refreshLeaseData = () => {
+    if (!platform) {
+      return;
+    }
+    void Promise.all([
+      leaseQuery.refetch(),
+      queryClient.invalidateQueries({ queryKey: ["platform-monitor"] }),
+    ]);
+  };
+
   const changeLeasePageSize = (next: number) => {
     setLeasePageSize(next);
     setLeasePage(0);
@@ -361,13 +373,24 @@ export function PlatformDetailPage() {
       cell: ({ row }) => {
         const lease = row.original;
         const releasing = releaseLeaseMutation.isPending && releaseLeaseMutation.variables?.account === lease.account;
+        const clearingAll = clearLeasesMutation.isPending;
         return (
           <div className="lease-row-actions" onClick={(event) => event.stopPropagation()}>
             <Button
               variant="ghost"
               size="sm"
+              onClick={() => setReassignFor(lease)}
+              disabled={releasing || clearingAll}
+              title={t("重指节点")}
+              aria-label={t("重指租约节点 — {{account}}", { account: lease.account })}
+            >
+              <Shuffle size={14} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => void handleReleaseLease(lease)}
-              disabled={releasing || clearLeasesMutation.isPending}
+              disabled={releasing || clearingAll}
               title={t("释放租约")}
               aria-label={t("释放账号 {{account}} 的租约", { account: lease.account })}
               style={{ color: "var(--delete-btn-color, #c27070)" }}
@@ -752,7 +775,7 @@ export function PlatformDetailPage() {
                   <div className="platform-drawer-section-head platform-lease-head">
                     <div className="platform-lease-heading">
                       <h4>{t("租约管理")}</h4>
-                      <p>{t("查看当前平台的租约绑定，并按账号释放单个租约。")}</p>
+                      <p>{t("查看当前平台的租约绑定，可释放租约或重指到其他节点。")}</p>
                     </div>
                     <div className="platform-lease-toolbar">
                       <label className="search-box platform-lease-search" htmlFor="platform-lease-search">
@@ -819,6 +842,16 @@ export function PlatformDetailPage() {
             ) : null}
           </Card>
         </>
+      ) : null}
+
+      {reassignFor ? (
+        <ReassignLeaseDialog
+          platformId={platformId}
+          lease={reassignFor}
+          onClose={() => setReassignFor(null)}
+          onReassigned={refreshLeaseData}
+          showToast={showToast}
+        />
       ) : null}
     </section>
   );
