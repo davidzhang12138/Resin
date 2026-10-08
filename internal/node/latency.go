@@ -40,6 +40,10 @@ type LatencyTable struct {
 
 	authorities []latencySlot
 	regular     []latencySlot
+
+	// lastDecayWindow records the decay window from the most recent write,
+	// so read-side decay (AverageEWMAForDomains) uses the same window.
+	lastDecayWindow time.Duration
 }
 
 // NewLatencyTable creates a new LatencyTable whose regular partition
@@ -83,6 +87,8 @@ func (t *LatencyTable) UpdateClassified(
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.lastDecayWindow = decayWindow
+
 	wasEmpty = t.totalSizeLocked() == 0
 
 	old, found := t.popDomainLocked(key)
@@ -94,6 +100,14 @@ func (t *LatencyTable) UpdateClassified(
 	}
 	evictedDomain, evicted = t.upsertRegularLocked(key, domain, stats, nowNs)
 	return wasEmpty, evictedDomain, evicted
+}
+
+// DecayWindow returns the decay window recorded from the most recent write,
+// or 0 if nothing was written since bootstrap recovery.
+func (t *LatencyTable) DecayWindow() time.Duration {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastDecayWindow
 }
 
 // GetDomainStats returns the latency stats for a domain, if present.
@@ -336,13 +350,26 @@ func tdEWMAUpdate(
 
 // AverageEWMAForDomains returns the average EWMA latency across domains that
 // exist in the node's latency table.
+//
+// Stale entries are decayed toward unmeasured before averaging: a domain not
+// re-sampled for N decay windows contributes weight exp(-N), so cold entries
+// (e.g. authorities no probe path ever visits) stop dragging the average.
+// If every matched entry is fully decayed (<1% weight), the freshest one wins.
 func AverageEWMAForDomains(entry *NodeEntry, domains []string) (time.Duration, bool) {
 	if entry == nil || entry.LatencyTable == nil || entry.LatencyTable.Size() == 0 || len(domains) == 0 {
 		return 0, false
 	}
 
-	var sum time.Duration
-	var count int
+	decayWindow := entry.LatencyTable.DecayWindow()
+	if decayWindow <= 0 {
+		decayWindow = 30 * time.Second // default, matches RecordLatency
+	}
+
+	now := time.Now()
+	var weightedSum, totalWeight float64
+	var matched int
+	var freshest time.Time
+	var freshestEwma time.Duration
 	for _, domain := range domains {
 		domain = strings.TrimSpace(domain)
 		if domain == "" {
@@ -352,13 +379,23 @@ func AverageEWMAForDomains(entry *NodeEntry, domains []string) (time.Duration, b
 		if !ok {
 			continue
 		}
-		sum += stats.Ewma
-		count++
+		matched++
+		if stats.LastUpdated.After(freshest) {
+			freshest = stats.LastUpdated
+			freshestEwma = stats.Ewma
+		}
+		weight := math.Exp(-now.Sub(stats.LastUpdated).Seconds() / decayWindow.Seconds())
+		weightedSum += float64(stats.Ewma) * weight
+		totalWeight += weight
 	}
-	if count == 0 {
+	if matched == 0 {
 		return 0, false
 	}
-	return time.Duration(int64(sum) / int64(count)), true
+	if totalWeight == 0 {
+		// All matched entries decayed below float resolution: use freshest.
+		return freshestEwma, true
+	}
+	return time.Duration(weightedSum / totalWeight), true
 }
 
 // AverageEWMAForDomainsMs returns the average EWMA latency in milliseconds

@@ -203,3 +203,43 @@ func TestAverageEWMAForDomainsMs_NoMatches(t *testing.T) {
 		t.Fatal("expected no average when no domains match")
 	}
 }
+
+// A stale authority entry must not dominate the average: after its weight
+// decays below 1%, the freshest sample wins instead.
+func TestAverageEWMAForDomainsMs_StaleEntriesDecayed(t *testing.T) {
+	entry := NewNodeEntry(HashFromRawOptions([]byte(`{"type":"ss","server":"1.1.1.1","port":443}`)), nil, time.Now(), 16)
+	entry.LatencyTable.Update("gstatic.com", 100*time.Millisecond, 2*time.Minute)
+	entry.LatencyTable.LoadEntry("github.com", DomainLatencyStats{
+		Ewma:        5000 * time.Millisecond,
+		LastUpdated: time.Now().Add(-24 * time.Hour),
+	})
+
+	avg, ok := AverageEWMAForDomainsMs(entry, []string{"gstatic.com", "github.com"})
+	if !ok {
+		t.Fatal("expected average to be available")
+	}
+	if avg != 100 {
+		t.Fatalf("stale github entry should be decayed away: got %v, want 100", avg)
+	}
+}
+
+// Fully-decayed entries fall back to the freshest sample rather than ~0.
+func TestAverageEWMAForDomainsMs_AllStaleFallsBackToFreshest(t *testing.T) {
+	entry := NewNodeEntry(HashFromRawOptions([]byte(`{"type":"ss","server":"1.1.1.1","port":443}`)), nil, time.Now(), 16)
+	entry.LatencyTable.LoadEntry("gstatic.com", DomainLatencyStats{
+		Ewma:        100 * time.Millisecond,
+		LastUpdated: time.Now().Add(-24 * time.Hour),
+	})
+	entry.LatencyTable.LoadEntry("github.com", DomainLatencyStats{
+		Ewma:        300 * time.Millisecond,
+		LastUpdated: time.Now().Add(-1 * time.Hour),
+	})
+
+	avg, ok := AverageEWMAForDomainsMs(entry, []string{"gstatic.com", "github.com"})
+	if !ok {
+		t.Fatal("expected average to be available")
+	}
+	if avg != 300 {
+		t.Fatalf("fallback should use freshest entry: got %v, want 300", avg)
+	}
+}
