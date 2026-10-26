@@ -523,3 +523,51 @@ func TestProbeEgress_ReturnsRegion(t *testing.T) {
 		t.Fatalf("region: got %q, want %q", got.Region, "jp")
 	}
 }
+
+func TestListNodes_HidesDetourOnlyByDefault(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	pool := newNodeListTestPool(subMgr)
+
+	sub := subscription.NewSubscription("sub-a", "sub-a", "https://example.com/a", true, false)
+	subMgr.Register(sub)
+
+	landingHash := addRoutableNodeForSubscription(
+		t,
+		pool,
+		sub,
+		[]byte(`{"type":"ss","tag":"[M] US-01","server":"1.1.1.1","port":443}`),
+		"198.51.100.10",
+	)
+
+	_ = addRoutableNodeForSubscription(
+		t,
+		pool,
+		sub,
+		[]byte(`{"type":"trojan","tag":"[前置] 香港 01","server":"2.2.2.2","port":443}`),
+		"198.51.100.20",
+	)
+
+	cp := &ControlPlaneService{
+		Pool:   pool,
+		SubMgr: subMgr,
+	}
+
+	// Default: detour-only nodes hidden
+	nodes, err := cp.ListNodes(NodeFilters{})
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].NodeHash != landingHash.Hex() {
+		t.Fatalf("ListNodes should only return landing node, got: %+v", nodes)
+	}
+
+	// Explicit include_detour = true
+	includeDetour := true
+	nodesWithDetour, err := cp.ListNodes(NodeFilters{IncludeDetour: &includeDetour})
+	if err != nil {
+		t.Fatalf("ListNodes with include_detour: %v", err)
+	}
+	if len(nodesWithDetour) != 2 {
+		t.Fatalf("ListNodes with include_detour should return both nodes, got %d", len(nodesWithDetour))
+	}
+}

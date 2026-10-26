@@ -24,6 +24,7 @@ type NodeFilters struct {
 	EgressIP       *string
 	ProbedSince    *time.Time
 	TagKeyword     *string
+	IncludeDetour  *bool
 }
 
 // ListNodes returns nodes from the pool with optional filters.
@@ -123,6 +124,12 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 	filters NodeFilters,
 	subLookup node.SubLookupFunc,
 ) bool {
+	// Detour-only filter: by default, hide transit/detour nodes from the node pool list.
+	includeDetour := filters.IncludeDetour != nil && *filters.IncludeDetour
+	if !includeDetour && entry.IsDetourOnly(subLookup) {
+		return false
+	}
+
 	// Enabled/disabled filter.
 	if filters.Enabled != nil {
 		enabled := true

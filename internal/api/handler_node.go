@@ -137,6 +137,12 @@ func HandleListNodes(cp *service.ControlPlaneService) http.HandlerFunc {
 		}
 		filters.Enabled = enabled
 
+		includeDetour, ok := parseBoolQueryOrWriteInvalid(w, r, "include_detour")
+		if !ok {
+			return
+		}
+		filters.IncludeDetour = includeDetour
+
 		if v := q.Get("probed_since"); v != "" {
 			t, err := time.Parse(time.RFC3339Nano, v)
 			if err != nil {

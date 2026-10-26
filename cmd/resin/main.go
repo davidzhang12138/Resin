@@ -298,7 +298,21 @@ func newTopologyRuntime(
 		engine.MarkNodeStatic(hash.Hex())
 		outboundMgr.EnsureNodeOutbound(hash)
 		// No NotifyNodeDirty here — AddNodeFromSub already notifies all platforms.
+		if entry, ok := pool.GetEntry(hash); ok && entry.IsDetourOnly(pool.MakeSubLookup()) {
+			return
+		}
 		probeMgr.TriggerImmediateEgressProbe(hash)
+	})
+	pool.SetOnNodeUpdated(func(hash node.Hash) {
+		engine.MarkNodeStatic(hash.Hex())
+		if entry, ok := pool.GetEntry(hash); ok {
+			entry.SetLastError("")
+			old := entry.Outbound.Swap(nil)
+			if old != nil {
+				outboundMgr.RemoveNodeOutbound(entry)
+			}
+		}
+		outboundMgr.EnsureNodeOutbound(hash)
 	})
 	pool.SetOnNodeRemoved(func(hash node.Hash, entry *node.NodeEntry) {
 		markNodeRemovedDirty(engine, hash, entry)
@@ -318,6 +332,9 @@ func newTopologyRuntime(
 		Downloader: downloader,
 		OnSubReenabledNode: func(hash node.Hash) {
 			outboundMgr.EnsureNodeOutbound(hash)
+			if entry, ok := pool.GetEntry(hash); ok && entry.IsDetourOnly(pool.MakeSubLookup()) {
+				return
+			}
 			probeMgr.TriggerImmediateEgressProbe(hash)
 			probeMgr.TriggerImmediateLatencyProbe(hash)
 		},
@@ -750,11 +767,24 @@ func loadBootstrapNodeStatics(
 
 func warmupBootstrapOutbounds(
 	hashes []node.Hash,
+	pool *topology.GlobalNodePool,
 	outboundMgr *outbound.OutboundManager,
 ) {
 	if len(hashes) == 0 {
 		return
 	}
+
+	// Sort hashes by dependency order: independent front nodes -> proxy groups -> landing nodes with detour.
+	sort.SliceStable(hashes, func(i, j int) bool {
+		var rawI, rawJ []byte
+		if entry, ok := pool.GetEntry(hashes[i]); ok {
+			rawI = entry.GetRawOptions()
+		}
+		if entry, ok := pool.GetEntry(hashes[j]); ok {
+			rawJ = entry.GetRawOptions()
+		}
+		return topology.NodeDependencyOrder(rawI) < topology.NodeDependencyOrder(rawJ)
+	})
 
 	workers := runtime.GOMAXPROCS(0)
 	if workers < 1 {
@@ -963,7 +993,7 @@ func bootstrapNodes(
 		return err
 	}
 
-	warmupBootstrapOutbounds(hashes, outboundMgr)
+	warmupBootstrapOutbounds(hashes, pool, outboundMgr)
 
 	if err := restoreBootstrapSubscriptionBindings(engine, pool, subManager); err != nil {
 		return err

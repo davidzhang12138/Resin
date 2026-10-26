@@ -4,6 +4,7 @@
 package topology
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -38,6 +39,7 @@ type GlobalNodePool struct {
 
 	// Persistence callbacks (optional, nil in tests without persistence).
 	onNodeAdded      func(hash node.Hash)                        // called after a new node is created
+	onNodeUpdated    func(hash node.Hash)                        // called when an existing node's raw options are updated
 	onNodeRemoved    func(hash node.Hash, entry *node.NodeEntry) // called after a node is deleted from pool
 	onSubNodeChanged func(subID string, hash node.Hash, added bool)
 
@@ -58,6 +60,7 @@ type PoolConfig struct {
 	SubLookup               func(subID string) *subscription.Subscription
 	GeoLookup               platform.GeoLookupFunc
 	OnNodeAdded             func(hash node.Hash)
+	OnNodeUpdated           func(hash node.Hash)
 	OnNodeRemoved           func(hash node.Hash, entry *node.NodeEntry)
 	OnSubNodeChanged        func(subID string, hash node.Hash, added bool)
 	OnNodeDynamicChanged    func(hash node.Hash)
@@ -88,6 +91,7 @@ func NewGlobalNodePool(cfg PoolConfig) *GlobalNodePool {
 		subLookup:               cfg.SubLookup,
 		geoLookup:               cfg.GeoLookup,
 		onNodeAdded:             cfg.OnNodeAdded,
+		onNodeUpdated:           cfg.OnNodeUpdated,
 		onNodeRemoved:           cfg.OnNodeRemoved,
 		onSubNodeChanged:        cfg.OnSubNodeChanged,
 		onNodeDynamicChanged:    cfg.OnNodeDynamicChanged,
@@ -108,6 +112,7 @@ func NewGlobalNodePool(cfg PoolConfig) *GlobalNodePool {
 // After mutation, notifies all platforms to re-evaluate the node.
 func (p *GlobalNodePool) AddNodeFromSub(hash node.Hash, rawOpts json.RawMessage, subID string) {
 	isNew := false
+	rawUpdated := false
 	p.nodes.Compute(hash, func(entry *node.NodeEntry, loaded bool) (*node.NodeEntry, xsync.ComputeOp) {
 		if !loaded {
 			createdAt := time.Now()
@@ -115,6 +120,9 @@ func (p *GlobalNodePool) AddNodeFromSub(hash node.Hash, rawOpts json.RawMessage,
 			// New subscription nodes start as circuit-open and must be proven healthy by probes.
 			entry.CircuitOpenSince.Store(createdAt.UnixNano())
 			isNew = true
+		} else if len(rawOpts) > 0 && !bytes.Equal(entry.GetRawOptions(), rawOpts) {
+			entry.SetRawOptions(rawOpts)
+			rawUpdated = true
 		}
 		entry.AddSubscriptionID(subID)
 		return entry, xsync.UpdateOp
@@ -122,6 +130,8 @@ func (p *GlobalNodePool) AddNodeFromSub(hash node.Hash, rawOpts json.RawMessage,
 
 	if isNew && p.onNodeAdded != nil {
 		p.onNodeAdded(hash)
+	} else if rawUpdated && p.onNodeUpdated != nil {
+		p.onNodeUpdated(hash)
 	}
 	if p.onSubNodeChanged != nil {
 		p.onSubNodeChanged(subID, hash, true)
@@ -512,10 +522,64 @@ func (p *GlobalNodePool) SetOnNodeAdded(fn func(hash node.Hash)) {
 	p.onNodeAdded = fn
 }
 
+// SetOnNodeUpdated sets the callback fired when an existing node's raw options change.
+// Must be called before any background workers are started.
+func (p *GlobalNodePool) SetOnNodeUpdated(fn func(hash node.Hash)) {
+	p.onNodeUpdated = fn
+}
+
 // SetOnNodeRemoved sets the callback fired when a node is removed from the pool.
 // Must be called before any background workers are started.
 func (p *GlobalNodePool) SetOnNodeRemoved(fn func(hash node.Hash, entry *node.NodeEntry)) {
 	p.onNodeRemoved = fn
+}
+
+// FindNodeByTag searches for a node whose raw options tag, outbound tag,
+// or subscription tags match the given tag.
+func (p *GlobalNodePool) FindNodeByTag(tag string) (node.Hash, *node.NodeEntry, bool) {
+	if tag == "" {
+		return node.Zero, nil, false
+	}
+	var foundHash node.Hash
+	var foundEntry *node.NodeEntry
+
+	p.nodes.Range(func(h node.Hash, e *node.NodeEntry) bool {
+		if ptr := e.Outbound.Load(); ptr != nil && *ptr != nil {
+			if (*ptr).Tag() == tag {
+				foundHash = h
+				foundEntry = e
+				return false
+			}
+		}
+		if node.ExtractTagFromRawOptions(e.GetRawOptions()) == tag {
+			foundHash = h
+			foundEntry = e
+			return false
+		}
+		if p.subLookup != nil {
+			for _, subID := range e.SubscriptionIDs() {
+				sub := p.subLookup(subID)
+				if sub == nil {
+					continue
+				}
+				if managed, ok := sub.ManagedNodes().LoadNode(h); ok {
+					for _, t := range managed.Tags {
+						if t == tag || sub.Name()+"/"+t == tag {
+							foundHash = h
+							foundEntry = e
+							return false
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	if foundEntry != nil {
+		return foundHash, foundEntry, true
+	}
+	return node.Zero, nil, false
 }
 
 // NotifyNodeDirty triggers platform re-evaluation for a single node.

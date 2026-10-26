@@ -85,6 +85,64 @@ func (e *NodeEntry) SubscriptionIDs() []string {
 	return cp
 }
 
+// SetRawOptions replaces the node's raw options (thread-safe).
+func (e *NodeEntry) SetRawOptions(raw json.RawMessage) {
+	e.mu.Lock()
+	e.RawOptions = append(json.RawMessage(nil), raw...)
+	e.mu.Unlock()
+}
+
+// GetRawOptions returns a copy of the node's raw options (thread-safe).
+func (e *NodeEntry) GetRawOptions() json.RawMessage {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return append(json.RawMessage(nil), e.RawOptions...)
+}
+
+// IsDetourOnly reports whether the node is a transit/detour-only node
+// (e.g. airport front proxy, url-test/selector proxy group) that should not
+// appear as an egress platform node, should not be probed for egress IP/latency,
+// and should not be displayed in the standard node pool list.
+func (e *NodeEntry) IsDetourOnly(subLookup SubLookupFunc) bool {
+	raw := e.GetRawOptions()
+	var h struct {
+		Type string `json:"type"`
+		Tag  string `json:"tag"`
+	}
+	_ = json.Unmarshal(raw, &h)
+	if h.Type == "urltest" || h.Type == "selector" {
+		return true
+	}
+	if isDetourTag(h.Tag) {
+		return true
+	}
+	if subLookup != nil {
+		for _, subID := range e.SubscriptionIDs() {
+			if _, _, tags, ok := subLookup(subID, e.Hash); ok {
+				for _, t := range tags {
+					if isDetourTag(t) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// ExtractTagFromRawOptions parses the "tag" field from raw outbound JSON options.
+func ExtractTagFromRawOptions(raw json.RawMessage) string {
+	var h struct {
+		Tag string `json:"tag"`
+	}
+	_ = json.Unmarshal(raw, &h)
+	return h.Tag
+}
+
+func isDetourTag(tag string) bool {
+	return strings.HasPrefix(tag, "[前置]") || strings.HasPrefix(tag, "⚡ 前置")
+}
+
 // AddSubscriptionID adds subID to the subscription set if not already present.
 // Must be called under external synchronization (e.g. xsync.Compute).
 func (e *NodeEntry) AddSubscriptionID(subID string) {
@@ -136,6 +194,9 @@ func (e *NodeEntry) MatchRegexs(regexes []*regexp.Regexp, subLookup SubLookupFun
 func (e *NodeEntry) MatchTagFilter(filter TagFilter, subLookup SubLookupFunc) bool {
 	if subLookup == nil {
 		return filter.Empty()
+	}
+	if e.IsDetourOnly(subLookup) {
+		return false
 	}
 
 	e.mu.RLock()

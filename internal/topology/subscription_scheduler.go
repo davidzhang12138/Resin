@@ -289,7 +289,7 @@ func (s *SubscriptionScheduler) UpdateSubscription(sub *subscription.Subscriptio
 		// Sort added nodes so independent nodes (front nodes, groups) are added
 		// before dependent nodes (nodes with detour).
 		sort.SliceStable(added, func(i, j int) bool {
-			return nodeDependencyOrder(rawByHash[added[i]]) < nodeDependencyOrder(rawByHash[added[j]])
+			return NodeDependencyOrder(rawByHash[added[i]]) < NodeDependencyOrder(rawByHash[added[j]])
 		})
 
 		for _, h := range added {
@@ -459,7 +459,11 @@ func (s *SubscriptionScheduler) fetchViaDownloader(url string) ([]byte, error) {
 	return s.downloader.Download(s.downloadCtx, url)
 }
 
-func nodeDependencyOrder(raw []byte) int {
+// NodeDependencyOrder returns the initialization priority for a node:
+// 0: independent nodes (e.g. front airport nodes)
+// 1: proxy groups (e.g. urltest, selector)
+// 2: dependent landing nodes (e.g. webshare with detour)
+func NodeDependencyOrder(raw []byte) int {
 	if bytes.Contains(raw, []byte(`"detour"`)) {
 		return 2
 	}

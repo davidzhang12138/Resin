@@ -25,6 +25,11 @@ type PoolAccessor interface {
 	RangeNodes(fn func(node.Hash, *node.NodeEntry) bool)
 }
 
+// TagFinder allows finding a node by tag across raw options, outbounds, or subscriptions.
+type TagFinder interface {
+	FindNodeByTag(tag string) (node.Hash, *node.NodeEntry, bool)
+}
+
 // closeOutbound closes an outbound if it implements io.Closer.
 func closeOutbound(ob adapter.Outbound) {
 	if c, ok := ob.(io.Closer); ok {
@@ -125,7 +130,7 @@ func (m *OutboundManager) RemoveNodeOutbound(entry *node.NodeEntry) {
 	if entry == nil {
 		return
 	}
-	tag := extractTagFromRawOptions(entry.RawOptions)
+	tag := node.ExtractTagFromRawOptions(entry.GetRawOptions())
 	if tag != "" {
 		m.tagMu.Lock()
 		if h, ok := m.tagToHash[tag]; ok && h == entry.Hash {
@@ -192,27 +197,49 @@ func (m *OutboundManager) ResolveOutbound(tag string) (adapter.Outbound, bool) {
 		var foundHash node.Hash
 		var foundEntry *node.NodeEntry
 
-		m.pool.RangeNodes(func(nodeHash node.Hash, e *node.NodeEntry) bool {
-			if ptr := e.Outbound.Load(); ptr != nil && *ptr != nil {
-				if (*ptr).Tag() == tag {
+		if finder, ok := m.pool.(TagFinder); ok {
+			if h, e, ok := finder.FindNodeByTag(tag); ok {
+				foundHash = h
+				foundEntry = e
+			}
+		}
+
+		if foundEntry == nil {
+			m.pool.RangeNodes(func(nodeHash node.Hash, e *node.NodeEntry) bool {
+				if ptr := e.Outbound.Load(); ptr != nil && *ptr != nil {
+					if (*ptr).Tag() == tag {
+						foundHash = nodeHash
+						foundEntry = e
+						return false
+					}
+				}
+				if node.ExtractTagFromRawOptions(e.GetRawOptions()) == tag {
 					foundHash = nodeHash
 					foundEntry = e
 					return false
 				}
-			}
-			if extractTagFromRawOptions(e.RawOptions) == tag {
-				foundHash = nodeHash
-				foundEntry = e
-				return false
-			}
-			return true
-		})
+				return true
+			})
+		}
 
 		if foundEntry == nil {
 			return nil, false
 		}
 		targetHash = foundHash
 		targetEntry = foundEntry
+
+		// If targetEntry's raw options tag does not match the requested tag,
+		// normalize the tag so sing-box builds the outbound with the expected tag.
+		rawTag := node.ExtractTagFromRawOptions(targetEntry.GetRawOptions())
+		if rawTag != "" && rawTag != tag {
+			var rawMap map[string]any
+			if err := json.Unmarshal(targetEntry.GetRawOptions(), &rawMap); err == nil {
+				rawMap["tag"] = tag
+				if updatedRaw, err := json.Marshal(rawMap); err == nil {
+					targetEntry.SetRawOptions(updatedRaw)
+				}
+			}
+		}
 
 		m.tagMu.Lock()
 		m.tagToHash[tag] = targetHash
@@ -226,14 +253,6 @@ func (m *OutboundManager) ResolveOutbound(tag string) (adapter.Outbound, bool) {
 		return *ptr, true
 	}
 	return nil, false
-}
-
-func extractTagFromRawOptions(raw json.RawMessage) string {
-	var h struct {
-		Tag string `json:"tag"`
-	}
-	_ = json.Unmarshal(raw, &h)
-	return h.Tag
 }
 
 func getGID() uint64 {

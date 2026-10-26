@@ -9,6 +9,42 @@ import (
 	"github.com/Resinat/Resin/internal/testutil"
 )
 
+func TestNodeEntry_IsDetourOnly(t *testing.T) {
+	// 1. Regular landing node
+	regular := NewNodeEntry(Hash{}, []byte(`{"type":"shadowsocks","tag":"US-01"}`), time.Now(), 0)
+	if regular.IsDetourOnly(nil) {
+		t.Fatal("regular node should not be detour-only")
+	}
+
+	// 2. Front node by tag in raw options
+	front := NewNodeEntry(Hash{}, []byte(`{"type":"trojan","tag":"[前置] 香港 01"}`), time.Now(), 0)
+	if !front.IsDetourOnly(nil) {
+		t.Fatal("front node with [前置] should be detour-only")
+	}
+
+	// 3. urltest proxy group
+	urltest := NewNodeEntry(Hash{}, []byte(`{"type":"urltest","tag":"⚡ 前置故障转移"}`), time.Now(), 0)
+	if !urltest.IsDetourOnly(nil) {
+		t.Fatal("urltest node should be detour-only")
+	}
+
+	// 4. Detour node identified via subLookup tag
+	subDetour := NewNodeEntry(Hash{}, []byte(`{"type":"trojan","tag":"node-x"}`), time.Now(), 0)
+	subDetour.AddSubscriptionID("sub-1")
+	subLookup := func(subID string, h Hash) (string, bool, []string, bool) {
+		return "Sub", true, []string{"[前置] 日本 01"}, true
+	}
+	if !subDetour.IsDetourOnly(subLookup) {
+		t.Fatal("node with [前置] in subLookup should be detour-only")
+	}
+
+	// Detour node must not match platform regex
+	allPattern := regexp.MustCompile(".*")
+	if front.MatchRegexs([]*regexp.Regexp{allPattern}, subLookup) {
+		t.Fatal("detour-only node should never match platform filter")
+	}
+}
+
 func TestNodeEntry_SubscriptionIDs(t *testing.T) {
 	e := NewNodeEntry(Hash{}, nil, time.Now(), 0)
 

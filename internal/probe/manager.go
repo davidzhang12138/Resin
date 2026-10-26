@@ -453,6 +453,10 @@ func (m *ProbeManager) scanEgress() {
 			return true // disabled node -> skip periodic probe
 		}
 
+		if entry.IsDetourOnly(subLookup) {
+			return true // detour-only node -> skip periodic probe
+		}
+
 		if entry.Outbound.Load() == nil {
 			return true // skip nil outbound
 		}
@@ -499,6 +503,10 @@ func (m *ProbeManager) scanLatency() {
 
 		if entry.IsDisabledBySubscriptions(subLookup) {
 			return true // disabled node -> skip periodic probe
+		}
+
+		if entry.IsDetourOnly(subLookup) {
+			return true // detour-only node -> skip periodic probe
 		}
 
 		if entry.Outbound.Load() == nil {
