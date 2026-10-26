@@ -1,11 +1,15 @@
 package outbound
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Resinat/Resin/internal/netutil"
@@ -45,10 +49,25 @@ func buildOutboundSafely(builder OutboundBuilder, rawOptions json.RawMessage) (o
 type OutboundManager struct {
 	pool    PoolAccessor
 	builder OutboundBuilder
+
+	tagMu     sync.RWMutex
+	tagToHash map[string]node.Hash
+
+	resolvingMu    sync.Mutex
+	resolvingByGID map[uint64]map[string]bool
 }
 
 func NewOutboundManager(pool PoolAccessor, builder OutboundBuilder) *OutboundManager {
-	return &OutboundManager{pool: pool, builder: builder}
+	m := &OutboundManager{
+		pool:           pool,
+		builder:        builder,
+		tagToHash:      make(map[string]node.Hash),
+		resolvingByGID: make(map[uint64]map[string]bool),
+	}
+	if setter, ok := builder.(OutboundResolverSetter); ok {
+		setter.SetOutboundResolver(m.ResolveOutbound)
+	}
+	return m
 }
 
 func (m *OutboundManager) isLiveEntry(hash node.Hash, entry *node.NodeEntry) bool {
@@ -104,10 +123,126 @@ func (m *OutboundManager) RemoveNodeOutbound(entry *node.NodeEntry) {
 	if entry == nil {
 		return
 	}
+	tag := extractTagFromRawOptions(entry.RawOptions)
+	if tag != "" {
+		m.tagMu.Lock()
+		if h, ok := m.tagToHash[tag]; ok && h == entry.Hash {
+			delete(m.tagToHash, tag)
+		}
+		m.tagMu.Unlock()
+	}
 	old := entry.Outbound.Swap(nil)
 	if old != nil {
 		closeOutbound(*old)
 	}
+}
+
+// ResolveOutbound looks up an outbound by tag across the node pool and builds it on-demand.
+// It detects and prevents detour circular dependencies.
+func (m *OutboundManager) ResolveOutbound(tag string) (adapter.Outbound, bool) {
+	if tag == "" || m.pool == nil {
+		return nil, false
+	}
+
+	gid := getGID()
+	m.resolvingMu.Lock()
+	visiting := m.resolvingByGID[gid]
+	if visiting == nil {
+		visiting = make(map[string]bool)
+		m.resolvingByGID[gid] = visiting
+	}
+	if visiting[tag] {
+		m.resolvingMu.Unlock()
+		return nil, false // Cycle detected
+	}
+	visiting[tag] = true
+	m.resolvingMu.Unlock()
+
+	defer func() {
+		m.resolvingMu.Lock()
+		delete(visiting, tag)
+		if len(visiting) == 0 {
+			delete(m.resolvingByGID, gid)
+		}
+		m.resolvingMu.Unlock()
+	}()
+
+	var targetEntry *node.NodeEntry
+	var targetHash node.Hash
+
+	m.tagMu.RLock()
+	h, cached := m.tagToHash[tag]
+	m.tagMu.RUnlock()
+
+	if cached {
+		if e, ok := m.pool.GetEntry(h); ok {
+			targetHash = h
+			targetEntry = e
+		} else {
+			m.tagMu.Lock()
+			delete(m.tagToHash, tag)
+			m.tagMu.Unlock()
+			cached = false
+		}
+	}
+
+	if !cached {
+		var foundHash node.Hash
+		var foundEntry *node.NodeEntry
+
+		m.pool.RangeNodes(func(nodeHash node.Hash, e *node.NodeEntry) bool {
+			if ptr := e.Outbound.Load(); ptr != nil && *ptr != nil {
+				if (*ptr).Tag() == tag {
+					foundHash = nodeHash
+					foundEntry = e
+					return false
+				}
+			}
+			if extractTagFromRawOptions(e.RawOptions) == tag {
+				foundHash = nodeHash
+				foundEntry = e
+				return false
+			}
+			return true
+		})
+
+		if foundEntry == nil {
+			return nil, false
+		}
+		targetHash = foundHash
+		targetEntry = foundEntry
+
+		m.tagMu.Lock()
+		m.tagToHash[tag] = targetHash
+		m.tagMu.Unlock()
+	}
+
+	m.EnsureNodeOutbound(targetHash)
+
+	ptr := targetEntry.Outbound.Load()
+	if ptr != nil && *ptr != nil {
+		return *ptr, true
+	}
+	return nil, false
+}
+
+func extractTagFromRawOptions(raw json.RawMessage) string {
+	var h struct {
+		Tag string `json:"tag"`
+	}
+	_ = json.Unmarshal(raw, &h)
+	return h.Tag
+}
+
+func getGID() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	fields := bytes.Fields(buf[:n])
+	if len(fields) >= 2 {
+		gid, _ := strconv.ParseUint(string(fields[1]), 10, 64)
+		return gid
+	}
+	return 0
 }
 
 // WarmupAll iterates all nodes in the pool and ensures each has an outbound.

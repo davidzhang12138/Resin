@@ -17,7 +17,32 @@ import (
 	"github.com/sagernet/sing/common"
 	sJson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"sync/atomic"
 )
+
+// OutboundResolverFunc resolves an outbound by its tag from an external source (e.g. node pool).
+type OutboundResolverFunc func(tag string) (adapter.Outbound, bool)
+
+// OutboundResolverSetter allows setting an external outbound resolver for detour chaining.
+type OutboundResolverSetter interface {
+	SetOutboundResolver(resolver OutboundResolverFunc)
+}
+
+type detourOutboundManager struct {
+	*sbOutbound.Manager
+	resolver atomic.Pointer[OutboundResolverFunc]
+}
+
+func (m *detourOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	if ob, ok := m.Manager.Outbound(tag); ok {
+		return ob, true
+	}
+	resFn := m.resolver.Load()
+	if resFn != nil && *resFn != nil {
+		return (*resFn)(tag)
+	}
+	return nil, false
+}
 
 // OutboundBuilder creates outbound instances from raw node options.
 type OutboundBuilder interface {
@@ -44,6 +69,14 @@ type SingboxBuilder struct {
 	logFactory          log.Factory
 	dnsTransportManager *dns.TransportManager
 	dnsRouter           *dns.Router
+	detourMgr           *detourOutboundManager
+}
+
+// SetOutboundResolver configures the external outbound resolver for detour chaining.
+func (b *SingboxBuilder) SetOutboundResolver(resolver OutboundResolverFunc) {
+	if b.detourMgr != nil {
+		b.detourMgr.resolver.Store(&resolver)
+	}
 }
 
 // NewSingboxBuilderWithConfig creates a SingboxBuilder with a complete
@@ -72,12 +105,13 @@ func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, err
 	inboundMgr := inbound.NewManager(logger, service.FromContext[adapter.InboundRegistry](ctx), endpointMgr)
 	service.MustRegister[adapter.InboundManager](ctx, inboundMgr)
 
-	// Outbound Manager (sing-box's own manager, for detour resolution)
-	outboundMgr := sbOutbound.NewManager(logger, service.FromContext[adapter.OutboundRegistry](ctx), endpointMgr, "")
-	service.MustRegister[adapter.OutboundManager](ctx, outboundMgr)
+	// Outbound Manager (sing-box's own manager, wrapped for detour resolution)
+	rawOutboundMgr := sbOutbound.NewManager(logger, service.FromContext[adapter.OutboundRegistry](ctx), endpointMgr, "")
+	detourMgr := &detourOutboundManager{Manager: rawOutboundMgr}
+	service.MustRegister[adapter.OutboundManager](ctx, detourMgr)
 
 	// DNS Transport Manager
-	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](ctx), outboundMgr, secureDNSFailoverTransportTag)
+	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](ctx), detourMgr, secureDNSFailoverTransportTag)
 	service.MustRegister[adapter.DNSTransportManager](ctx, dnsTransportMgr)
 
 	// DNS Router
@@ -122,6 +156,7 @@ func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, err
 		logFactory:          logFactory,
 		dnsTransportManager: dnsTransportMgr,
 		dnsRouter:           dnsRouter,
+		detourMgr:           detourMgr,
 	}, nil
 }
 
@@ -155,6 +190,16 @@ func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, er
 		if err := adapter.LegacyStart(ob, stage); err != nil {
 			_ = common.Close(ob)
 			return nil, fmt.Errorf("outbound start %s [%s]: %w", stage, outboundConfig.Type, err)
+		}
+	}
+
+	// 4. Eagerly resolve and warm up detour dependencies if configured.
+	if b.detourMgr != nil {
+		for _, depTag := range ob.Dependencies() {
+			if _, ok := b.detourMgr.Outbound(depTag); !ok {
+				_ = common.Close(ob)
+				return nil, fmt.Errorf("outbound detour not found: %s", depTag)
+			}
 		}
 	}
 
