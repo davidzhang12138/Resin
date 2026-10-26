@@ -17,6 +17,7 @@ import (
 	"github.com/sagernet/sing/common"
 	sJson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"sync/atomic"
 )
 
@@ -85,6 +86,7 @@ func (b *SingboxBuilder) SetOutboundResolver(resolver OutboundResolverFunc) {
 func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, error) {
 	ctx := context.Background()
 	ctx = include.Context(ctx) // inject protocol registries
+	ctx = pause.WithDefaultManager(ctx) // required by URLTest and other sing-box groups
 
 	logFactory := log.NewNOPFactory()
 	logger := logFactory.NewLogger("resin-outbound")
