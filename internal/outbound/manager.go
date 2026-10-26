@@ -107,6 +107,8 @@ func (m *OutboundManager) EnsureNodeOutbound(hash node.Hash) {
 		return
 	}
 
+	entry.SetLastError("")
+
 	// Close-and-clear if the node disappeared/replaced right after CAS.
 	if !m.isLiveEntry(hash, entry) {
 		old := entry.Outbound.Swap(nil)

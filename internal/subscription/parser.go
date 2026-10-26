@@ -206,9 +206,11 @@ func parseClashYAMLSubscription(text string) ([]ParsedNode, bool, error) {
 	}
 
 	var cfg struct {
-		Proxies    []map[string]any `yaml:"proxies"`
-		ProxyUpper []map[string]any `yaml:"Proxy"`
-		ProxyLower []map[string]any `yaml:"proxy"`
+		Proxies         []map[string]any `yaml:"proxies"`
+		ProxyUpper      []map[string]any `yaml:"Proxy"`
+		ProxyLower      []map[string]any `yaml:"proxy"`
+		ProxyGroups     []map[string]any `yaml:"proxy-groups"`
+		ProxyGroupLower []map[string]any `yaml:"proxy_groups"`
 	}
 	if err := yaml.Unmarshal([]byte(text), &cfg); err != nil {
 		return nil, true, fmt.Errorf("subscription: unmarshal clash yaml: %w", err)
@@ -220,7 +222,78 @@ func parseClashYAMLSubscription(text string) ([]ParsedNode, bool, error) {
 	if len(proxies) == 0 && len(cfg.ProxyLower) > 0 {
 		proxies = cfg.ProxyLower
 	}
-	return parseClashProxies(proxies), true, nil
+	groups := cfg.ProxyGroups
+	if len(groups) == 0 && len(cfg.ProxyGroupLower) > 0 {
+		groups = cfg.ProxyGroupLower
+	}
+	nodes := parseClashProxies(proxies)
+	groupNodes := parseClashProxyGroups(groups)
+	nodes = append(nodes, groupNodes...)
+	return nodes, true, nil
+}
+
+func parseClashProxyGroups(groups []map[string]any) []ParsedNode {
+	nodes := make([]ParsedNode, 0, len(groups))
+	for _, g := range groups {
+		if node, ok := convertClashGroupToNode(g); ok {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes
+}
+
+func convertClashGroupToNode(group map[string]any) (ParsedNode, bool) {
+	name := strings.TrimSpace(getString(group, "name"))
+	if name == "" {
+		return ParsedNode{}, false
+	}
+	groupType := strings.ToLower(strings.TrimSpace(getString(group, "type")))
+	proxies := getStringSlice(group, "proxies")
+	if len(proxies) == 0 {
+		return ParsedNode{}, false
+	}
+
+	outbound := make(map[string]any)
+	outbound["tag"] = name
+	outbound["outbounds"] = proxies
+
+	switch groupType {
+	case "url-test", "urltest", "fallback":
+		outbound["type"] = "urltest"
+		testURL := strings.TrimSpace(getString(group, "url"))
+		if testURL == "" {
+			testURL = "https://cp.cloudflare.com/generate_204"
+		}
+		outbound["url"] = testURL
+
+		if intervalSec, ok := getUint(group, "interval"); ok && intervalSec > 0 {
+			outbound["interval"] = fmt.Sprintf("%ds", intervalSec)
+		} else if intervalStr := strings.TrimSpace(getString(group, "interval")); intervalStr != "" {
+			outbound["interval"] = intervalStr
+		} else {
+			outbound["interval"] = "300s"
+		}
+
+		if tolerance, ok := getUint(group, "tolerance"); ok {
+			outbound["tolerance"] = tolerance
+		}
+	case "select", "selector":
+		outbound["type"] = "selector"
+		if defaultProxy := strings.TrimSpace(getString(group, "default")); defaultProxy != "" {
+			outbound["default"] = defaultProxy
+		}
+	default:
+		return ParsedNode{}, false
+	}
+
+	raw, err := json.Marshal(outbound)
+	if err != nil {
+		return ParsedNode{}, false
+	}
+	return ParsedNode{
+		Tag:        name,
+		RawOptions: raw,
+	}, true
 }
 
 func parseClashProxies(proxies []map[string]any) []ParsedNode {

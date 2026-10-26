@@ -283,6 +283,56 @@ proxies:
 	}
 }
 
+func TestParseGeneralSubscription_ClashYAML_WithProxyGroups(t *testing.T) {
+	data := []byte(`
+proxies:
+  - name: front-1
+    type: ss
+    server: 1.1.1.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+  - name: landing-1
+    type: http
+    server: 2.2.2.2
+    port: 8080
+    dialer-proxy: "⚡ 前置自动优选"
+
+proxy-groups:
+  - name: "⚡ 前置自动优选"
+    type: url-test
+    url: https://cp.cloudflare.com/generate_204
+    interval: 300
+    tolerance: 50
+    proxies:
+      - front-1
+`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("expected 3 nodes (front-1, landing-1, group), got %d", len(nodes))
+	}
+
+	tags := map[string]string{}
+	for _, n := range nodes {
+		obj := parseNodeRaw(t, n.RawOptions)
+		tags[n.Tag] = obj["type"].(string)
+	}
+
+	if tags["front-1"] != "shadowsocks" {
+		t.Fatalf("expected front-1 type shadowsocks, got %s", tags["front-1"])
+	}
+	if tags["landing-1"] != "http" {
+		t.Fatalf("expected landing-1 type http, got %s", tags["landing-1"])
+	}
+	if tags["⚡ 前置自动优选"] != "urltest" {
+		t.Fatalf("expected group type urltest, got %s", tags["⚡ 前置自动优选"])
+	}
+}
+
 func TestParseGeneralSubscription_ClashJSON_NewProtocolsAndDialFields(t *testing.T) {
 	data := []byte(`{
 		"proxies": [

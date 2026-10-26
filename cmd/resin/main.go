@@ -262,6 +262,10 @@ func newTopologyRuntime(
 			}
 			outboundPtr := entry.Outbound.Load()
 			if outboundPtr == nil {
+				outboundMgr.EnsureNodeOutbound(hash)
+				outboundPtr = entry.Outbound.Load()
+			}
+			if outboundPtr == nil {
 				return nil, 0, outbound.ErrOutboundNotReady
 			}
 			return netutil.HTTPGetViaOutbound(ctx, *outboundPtr, url, netutil.OutboundHTTPOptions{

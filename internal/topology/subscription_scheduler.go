@@ -1,9 +1,11 @@
 package topology
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -284,6 +286,12 @@ func (s *SubscriptionScheduler) UpdateSubscription(sub *subscription.Subscriptio
 
 		sub.SwapManagedNodes(mergedManagedNodes)
 
+		// Sort added nodes so independent nodes (front nodes, groups) are added
+		// before dependent nodes (nodes with detour).
+		sort.SliceStable(added, func(i, j int) bool {
+			return nodeDependencyOrder(rawByHash[added[i]]) < nodeDependencyOrder(rawByHash[added[j]])
+		})
+
 		for _, h := range added {
 			managed, ok := mergedManagedNodes.LoadNode(h)
 			if ok && managed.Evicted {
@@ -449,4 +457,14 @@ func (s *SubscriptionScheduler) RenameSubscription(sub *subscription.Subscriptio
 
 func (s *SubscriptionScheduler) fetchViaDownloader(url string) ([]byte, error) {
 	return s.downloader.Download(s.downloadCtx, url)
+}
+
+func nodeDependencyOrder(raw []byte) int {
+	if bytes.Contains(raw, []byte(`"detour"`)) {
+		return 2
+	}
+	if bytes.Contains(raw, []byte(`"outbounds"`)) {
+		return 1
+	}
+	return 0
 }
