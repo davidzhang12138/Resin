@@ -653,6 +653,82 @@ func TestBootstrapNodes_MissingDynamicDefaultsCircuitOpen(t *testing.T) {
 	}
 }
 
+// A group member deduplicated by hash keeps another node's raw tag and is only
+// resolvable through subscription tags, so warmup must run after bindings restore.
+func TestBootstrapNodes_DetourGroupWithDedupedMemberBuildsOnRestart(t *testing.T) {
+	engine, closer, err := state.PersistenceBootstrap(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatalf("PersistenceBootstrap: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	const subID = "sub-bootstrap-detour"
+	now := time.Now().UnixNano()
+	if err := engine.UpsertSubscription(model.Subscription{
+		ID:               subID,
+		Name:             "Sub",
+		URL:              "https://example.com/sub",
+		UpdateIntervalNs: int64(30 * time.Minute),
+		Enabled:          true,
+		CreatedAtNs:      now,
+		UpdatedAtNs:      now,
+	}); err != nil {
+		t.Fatalf("UpsertSubscription: %v", err)
+	}
+
+	frontRaw := json.RawMessage(`{"type":"socks","tag":"[前置] A","server":"127.0.0.1","server_port":1080}`)
+	groupRaw := json.RawMessage(`{"type":"urltest","tag":"⚡ 前置故障转移","outbounds":["[前置] A","[前置] B"]}`)
+	landingRaw := json.RawMessage(`{"type":"http","tag":"[M] 落地","server":"127.0.0.1","server_port":8080,"detour":"⚡ 前置故障转移"}`)
+	frontHash := node.HashFromRawOptions(frontRaw)
+	groupHash := node.HashFromRawOptions(groupRaw)
+	landingHash := node.HashFromRawOptions(landingRaw)
+
+	if err := engine.BulkUpsertNodesStatic([]model.NodeStatic{
+		{Hash: frontHash.Hex(), RawOptions: frontRaw, CreatedAtNs: now},
+		{Hash: groupHash.Hex(), RawOptions: groupRaw, CreatedAtNs: now},
+		{Hash: landingHash.Hex(), RawOptions: landingRaw, CreatedAtNs: now},
+	}); err != nil {
+		t.Fatalf("BulkUpsertNodesStatic: %v", err)
+	}
+	// "[前置] B" shares frontHash (same config), so it exists only as a subscription tag.
+	if err := engine.BulkUpsertSubscriptionNodes([]model.SubscriptionNode{
+		{SubscriptionID: subID, NodeHash: frontHash.Hex(), Tags: []string{"[前置] A", "[前置] B"}},
+		{SubscriptionID: subID, NodeHash: groupHash.Hex(), Tags: []string{"⚡ 前置故障转移"}},
+		{SubscriptionID: subID, NodeHash: landingHash.Hex(), Tags: []string{"[M] 落地"}},
+	}); err != nil {
+		t.Fatalf("BulkUpsertSubscriptionNodes: %v", err)
+	}
+
+	runtimeCfg := config.NewDefaultRuntimeConfig()
+	envCfg := newDefaultPlatformEnvConfig()
+	envCfg.MaxLatencyTableEntries = 16
+	subManager, pool := newBootstrapTestRuntime(runtimeCfg)
+	if err := bootstrapTopology(engine, subManager, pool, envCfg); err != nil {
+		t.Fatalf("bootstrapTopology: %v", err)
+	}
+
+	builder, err := outbound.NewSingboxBuilderWithConfig(outbound.SingboxBuilderConfig{
+		DNSUpstreams: []string{"https://1.1.1.1/dns-query"},
+	})
+	if err != nil {
+		t.Fatalf("NewSingboxBuilderWithConfig: %v", err)
+	}
+	t.Cleanup(func() { _ = builder.Close() })
+
+	outboundMgr := outbound.NewOutboundManager(pool, builder)
+	if err := bootstrapNodes(engine, pool, subManager, outboundMgr, envCfg, runtimeCfg.LatencyAuthorities); err != nil {
+		t.Fatalf("bootstrapNodes: %v", err)
+	}
+
+	entry, ok := pool.GetEntry(landingHash)
+	if !ok {
+		t.Fatal("landing node missing after bootstrapNodes")
+	}
+	if entry.Outbound.Load() == nil {
+		t.Fatalf("landing node outbound not built, last error: %q", entry.GetLastError())
+	}
+}
+
 func TestBootstrapNodes_DynamicRecordOverridesDefaultCircuitOpen(t *testing.T) {
 	engine, closer, err := state.PersistenceBootstrap(t.TempDir(), t.TempDir())
 	if err != nil {

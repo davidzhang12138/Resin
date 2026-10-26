@@ -979,7 +979,7 @@ func restoreBootstrapNodeLatencies(
 }
 
 // bootstrapNodes loads cached node data from persistence for bootstrap recovery.
-// Steps: static nodes → subscription bindings → dynamic state → latency tables.
+// Steps: static nodes → subscription bindings → outbound warmup → dynamic state → latency tables.
 func bootstrapNodes(
 	engine *state.StateEngine,
 	pool *topology.GlobalNodePool,
@@ -993,11 +993,15 @@ func bootstrapNodes(
 		return err
 	}
 
-	warmupBootstrapOutbounds(hashes, pool, outboundMgr)
-
 	if err := restoreBootstrapSubscriptionBindings(engine, pool, subManager); err != nil {
 		return err
 	}
+
+	// Warm up only after subscription bindings are restored: detour/group
+	// members deduplicated by hash keep another node's raw tag, so they can
+	// only be resolved through subscription tags (FindNodeByTag).
+	warmupBootstrapOutbounds(hashes, pool, outboundMgr)
+
 	if err := restoreBootstrapNodeDynamics(engine, pool); err != nil {
 		return err
 	}
