@@ -9,3 +9,7 @@ start-instance.sh
 .claude/
 .omc/
 .local/
+
+# Local Go build cache (workspace-scoped GOCACHE / GOTMPDIR)
+.gocache/
+.gotmp/
