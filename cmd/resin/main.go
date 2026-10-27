@@ -604,7 +604,21 @@ type runtimeStatsAdapter struct {
 	authorities func() []string
 }
 
-func (a *runtimeStatsAdapter) TotalNodes() int { return a.pool.Size() }
+// TotalNodes counts product-level egress nodes only. Transit / detour-only
+// nodes (front proxies and proxy groups) are excluded: they are never probed
+// and never shown in the node pool, so counting them would deflate the health
+// ratio shown on the dashboard.
+func (a *runtimeStatsAdapter) TotalNodes() int {
+	count := 0
+	isProductNode := a.pool.MakeProductNodeEvaluator()
+	a.pool.RangeNodes(func(_ node.Hash, entry *node.NodeEntry) bool {
+		if isProductNode(entry) {
+			count++
+		}
+		return true
+	})
+	return count
+}
 
 func (a *runtimeStatsAdapter) HealthyNodes() int {
 	count := 0
@@ -620,7 +634,11 @@ func (a *runtimeStatsAdapter) HealthyNodes() int {
 
 func (a *runtimeStatsAdapter) EgressIPCount() int {
 	seen := make(map[netip.Addr]struct{})
+	isProductNode := a.pool.MakeProductNodeEvaluator()
 	a.pool.RangeNodes(func(_ node.Hash, entry *node.NodeEntry) bool {
+		if !isProductNode(entry) {
+			return true
+		}
 		if ip := entry.GetEgressIP(); ip.IsValid() {
 			seen[ip] = struct{}{}
 		}

@@ -62,3 +62,44 @@ func TestNodePoolStatsAdapter_HealthyNodesRequiresOutbound(t *testing.T) {
 		t.Fatalf("unique_healthy_egress_ips: got %d, want %d", got, want)
 	}
 }
+
+// TestNodePoolStatsAdapter_ExcludesDetourOnlyNodes guards the dashboard health
+// ratio: transit / detour-only nodes (front proxies and proxy groups) are never
+// probed, so counting them in total_nodes would permanently deflate the rate.
+func TestNodePoolStatsAdapter_ExcludesDetourOnlyNodes(t *testing.T) {
+	subMgr, pool := newBootstrapTestRuntime(config.NewDefaultRuntimeConfig())
+	adapter := &runtimeStatsAdapter{pool: pool}
+
+	sub := subscription.NewSubscription("sub-1", "sub", "https://example.com/sub", true, false)
+	subMgr.Register(sub)
+
+	load := func(raw string, healthy bool, egressIP string) {
+		hash := node.HashFromRawOptions([]byte(raw))
+		entry := node.NewNodeEntry(hash, []byte(raw), time.Now(), 0)
+		entry.AddSubscriptionID(sub.ID)
+		sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{hash.Hex()[:8]}})
+		if healthy {
+			ob := testutil.NewNoopOutbound()
+			entry.Outbound.Store(&ob)
+			entry.SetEgressIP(netip.MustParseAddr(egressIP))
+		}
+		pool.LoadNodeFromBootstrap(entry)
+	}
+
+	// One real landing node that is healthy.
+	load(`{"type":"http","tag":"landing-1","server":"1.1.1.1","port":443}`, true, "203.0.113.10")
+	// Front proxy node: detour-only by tag, never probed.
+	load(`{"type":"trojan","tag":"[前置] 香港 01","server":"2.2.2.2","port":443}`, false, "")
+	// Proxy group: detour-only by type, never probed.
+	load(`{"type":"urltest","tag":"⚡ 前置自动优选","outbounds":["[前置] 香港 01"]}`, false, "")
+
+	if got, want := adapter.TotalNodes(), 1; got != want {
+		t.Fatalf("total_nodes should exclude detour-only nodes: got %d, want %d", got, want)
+	}
+	if got, want := adapter.HealthyNodes(), 1; got != want {
+		t.Fatalf("healthy_nodes: got %d, want %d", got, want)
+	}
+	if got, want := adapter.EgressIPCount(), 1; got != want {
+		t.Fatalf("egress_ip_count should exclude detour-only nodes: got %d, want %d", got, want)
+	}
+}

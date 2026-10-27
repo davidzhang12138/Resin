@@ -416,13 +416,29 @@ func (p *GlobalNodePool) IsNodeDisabled(hash node.Hash) bool {
 	return entry.IsDisabledBySubscriptions(p.MakeSubLookup())
 }
 
+// MakeProductNodeEvaluator builds a predicate that reports whether an entry is
+// a product-level egress node. Transit / detour-only nodes (front proxies and
+// proxy groups) are internal plumbing: they are never probed for egress IP or
+// latency and are hidden from the node pool list, so pool-level aggregates
+// (total/healthy node counts, egress IP counts) must not count them.
+func (p *GlobalNodePool) MakeProductNodeEvaluator() func(entry *node.NodeEntry) bool {
+	subLookup := p.MakeSubLookup()
+	return func(entry *node.NodeEntry) bool {
+		if entry == nil {
+			return false
+		}
+		return !entry.IsDetourOnly(subLookup)
+	}
+}
+
 // MakeHealthyAndEnabledEvaluator builds a predicate for pool-context health
-// aggregates: the node must not be disabled by subscription state and must
-// satisfy the entry-local health checks.
+// aggregates: the node must be a product-level egress node, must not be
+// disabled by subscription state, and must satisfy the entry-local health
+// checks.
 func (p *GlobalNodePool) MakeHealthyAndEnabledEvaluator() func(entry *node.NodeEntry) bool {
 	subLookup := p.MakeSubLookup()
 	return func(entry *node.NodeEntry) bool {
-		if entry == nil || entry.IsDisabledBySubscriptions(subLookup) {
+		if entry == nil || entry.IsDetourOnly(subLookup) || entry.IsDisabledBySubscriptions(subLookup) {
 			return false
 		}
 		return entry.IsHealthy()

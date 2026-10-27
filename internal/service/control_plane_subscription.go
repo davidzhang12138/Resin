@@ -44,20 +44,30 @@ func (s *ControlPlaneService) subToResponse(sub *subscription.Subscription) Subs
 	nodeCount := 0
 	healthyNodeCount := 0
 	var isHealthyAndEnabled func(*node.NodeEntry) bool
-	if sub.Enabled() && s != nil && s.Pool != nil {
-		isHealthyAndEnabled = s.Pool.MakeHealthyAndEnabledEvaluator()
+	var subLookup node.SubLookupFunc
+	if s != nil && s.Pool != nil {
+		subLookup = s.Pool.MakeSubLookup()
+		if sub.Enabled() {
+			isHealthyAndEnabled = s.Pool.MakeHealthyAndEnabledEvaluator()
+		}
 	}
 	if managed := sub.ManagedNodes(); managed != nil {
 		managed.RangeNodes(func(h node.Hash, n subscription.ManagedNode) bool {
 			if n.Evicted {
 				return true
 			}
+			var entry *node.NodeEntry
+			if s != nil && s.Pool != nil {
+				entry, _ = s.Pool.GetEntry(h)
+			}
+			// Transit / detour-only nodes are internal plumbing and are never
+			// probed, so counting them would report them as permanently unhealthy.
+			if entry != nil && entry.IsDetourOnly(subLookup) {
+				return true
+			}
 			nodeCount++
-			if isHealthyAndEnabled != nil {
-				entry, ok := s.Pool.GetEntry(h)
-				if ok && isHealthyAndEnabled(entry) {
-					healthyNodeCount++
-				}
+			if isHealthyAndEnabled != nil && entry != nil && isHealthyAndEnabled(entry) {
+				healthyNodeCount++
 			}
 			return true
 		})

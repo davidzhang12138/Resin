@@ -800,6 +800,7 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
 
 #### 节点数量
 * 统计全局池节点总数量、健康节点数量（未熔断且 Outbound 非空）、出口 IP 数量。
+* 口径：只统计“产品级出口节点”。中转节点（前置代理与 `urltest`/`selector` 代理组）属于内部链路，不参与出口探测与延迟探测，也不在节点池列表中展示，因此不计入 `total_nodes` / `healthy_nodes` / `egress_ip_count`，否则会让节点健康率被长期压低。
 * 每 `RESIN_METRIC_BUCKET_SECONDS` 统计一次。支持手动按需一次性统计。手动按需统计不计入持久化。
 * 持久化到 `metrics.db`。
 * 全局视角。
@@ -1393,7 +1394,7 @@ API 阻塞到重建完成为止。
 }
 ```
 
-`healthy_node_count` 规则：节点 `Outbound` 非空且节点未熔断。
+`healthy_node_count` 规则：节点 `Outbound` 非空且节点未熔断。`node_count` / `healthy_node_count` 均不统计中转节点（前置代理与代理组）。
 * `source_type=remote`：`url` 非空，`content` 为空字符串。
 * `source_type=local`：`content` 非空，`url` 为空字符串。
 

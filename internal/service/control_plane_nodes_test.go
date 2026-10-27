@@ -571,3 +571,43 @@ func TestListNodes_HidesDetourOnlyByDefault(t *testing.T) {
 		t.Fatalf("ListNodes with include_detour should return both nodes, got %d", len(nodesWithDetour))
 	}
 }
+
+func TestGetSubscription_NodeCountExcludesDetourOnlyNodes(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	pool := newNodeListTestPool(subMgr)
+
+	sub := subscription.NewSubscription("sub-a", "sub-a", "https://example.com/a", true, false)
+	subMgr.Register(sub)
+
+	addRoutableNodeForSubscription(
+		t,
+		pool,
+		sub,
+		[]byte(`{"type":"ss","tag":"[M] US-01","server":"1.1.1.1","port":443}`),
+		"198.51.100.10",
+	)
+	// Front proxy node: detour-only, never probed.
+	_ = addRoutableNodeForSubscription(
+		t,
+		pool,
+		sub,
+		[]byte(`{"type":"trojan","tag":"[前置] 香港 01","server":"2.2.2.2","port":443}`),
+		"198.51.100.20",
+	)
+
+	cp := &ControlPlaneService{
+		Pool:   pool,
+		SubMgr: subMgr,
+	}
+
+	resp, err := cp.GetSubscription(sub.ID)
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if resp.NodeCount != 1 {
+		t.Fatalf("node_count should exclude detour-only nodes: got %d, want 1", resp.NodeCount)
+	}
+	if resp.HealthyNodeCount != 1 {
+		t.Fatalf("healthy_node_count: got %d, want 1", resp.HealthyNodeCount)
+	}
+}
