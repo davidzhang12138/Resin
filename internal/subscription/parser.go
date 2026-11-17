@@ -274,6 +274,23 @@ func convertClashGroupToNode(group map[string]any, validTags map[string]bool) (P
 	switch groupType {
 	case "url-test", "urltest", "fallback":
 		outbound["type"] = "urltest"
+		if groupType == "fallback" {
+			outbound["type"] = "fallback"
+			if timeout, ok := getUint(group, "timeout"); ok && timeout > 0 {
+				outbound["timeout"] = fmt.Sprintf("%dms", timeout)
+			}
+			if status, ok := getUint(group, "expected-status", "expected_status"); ok {
+				outbound["expected_status"] = fmt.Sprint(status)
+			} else if status := getString(group, "expected-status", "expected_status"); status != "" {
+				outbound["expected_status"] = status
+			}
+			if urls := getStringSlice(group, "probe-urls"); len(urls) > 0 {
+				outbound["probe_urls"] = urls
+			}
+			if quorum, ok := getUint(group, "probe-quorum"); ok {
+				outbound["probe_quorum"] = quorum
+			}
+		}
 		testURL := strings.TrimSpace(getString(group, "url"))
 		if testURL == "" {
 			testURL = "https://cp.cloudflare.com/generate_204"

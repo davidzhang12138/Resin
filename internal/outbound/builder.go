@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
@@ -16,6 +17,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
 	sJson "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 	"sync/atomic"
@@ -40,9 +42,69 @@ func (m *detourOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
 	}
 	resFn := m.resolver.Load()
 	if resFn != nil && *resFn != nil {
-		return (*resFn)(tag)
+		ob, ok := (*resFn)(tag)
+		if ok && ob != nil {
+			switch ob.Type() {
+			case "fallback", "urltest", "selector":
+				// sing-box caches detour objects. Keep the group reference live
+				// across subscription replacement instead of retaining a closed group.
+				return &liveDetourGroup{Outbound: ob, resolve: *resFn}, true
+			}
+		}
+		return ob, ok
 	}
 	return nil, false
+}
+
+type liveDetourGroup struct {
+	adapter.Outbound
+	resolve OutboundResolverFunc
+}
+
+func (g *liveDetourGroup) current() (adapter.Outbound, error) {
+	ob, ok := g.resolve(g.Tag())
+	if !ok || ob == nil {
+		return nil, fmt.Errorf("outbound detour not found: %s", g.Tag())
+	}
+	return ob, nil
+}
+
+func (g *liveDetourGroup) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	ob, err := g.current()
+	if err != nil {
+		return nil, err
+	}
+	return ob.DialContext(ctx, network, destination)
+}
+
+func (g *liveDetourGroup) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	ob, err := g.current()
+	if err != nil {
+		return nil, err
+	}
+	return ob.ListenPacket(ctx, destination)
+}
+
+func (g *liveDetourGroup) Now() string {
+	ob, err := g.current()
+	if err != nil {
+		return ""
+	}
+	if group, ok := ob.(adapter.OutboundGroup); ok {
+		return group.Now()
+	}
+	return ob.Tag()
+}
+
+func (g *liveDetourGroup) All() []string {
+	ob, err := g.current()
+	if err != nil {
+		return nil
+	}
+	if group, ok := ob.(adapter.OutboundGroup); ok {
+		return group.All()
+	}
+	return []string{ob.Tag()}
 }
 
 // OutboundBuilder creates outbound instances from raw node options.
@@ -85,8 +147,9 @@ func (b *SingboxBuilder) SetOutboundResolver(resolver OutboundResolverFunc) {
 // when done.
 func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, error) {
 	ctx := context.Background()
-	ctx = include.Context(ctx) // inject protocol registries
+	ctx = include.Context(ctx)          // inject protocol registries
 	ctx = pause.WithDefaultManager(ctx) // required by URLTest and other sing-box groups
+	registerFallback(service.FromContext[adapter.OutboundRegistry](ctx).(*sbOutbound.Registry))
 
 	logFactory := log.NewNOPFactory()
 	logger := logFactory.NewLogger("resin-outbound")

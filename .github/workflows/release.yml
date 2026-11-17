@@ -48,6 +48,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Test Subscription and Proxy Paths
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          go test -race ./internal/subscription ./internal/outbound
+          go test ./internal/topology ./internal/proxy ./internal/api ./cmd/resin
+
       - name: Build Go Binary
         env:
           GOOS: ${{ matrix.goos }}
