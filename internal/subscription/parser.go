@@ -227,44 +227,51 @@ func parseClashYAMLSubscription(text string) ([]ParsedNode, bool, error) {
 		groups = cfg.ProxyGroupLower
 	}
 	nodes := parseClashProxies(proxies)
-	validTags := make(map[string]bool, len(nodes))
+	validTags := make(map[string]ParsedNode, len(nodes))
 	for _, n := range nodes {
-		validTags[n.Tag] = true
+		validTags[n.Tag] = n
 	}
-	groupNodes := parseClashProxyGroups(groups, validTags)
+	groupNodes, err := parseClashProxyGroups(groups, validTags)
+	if err != nil {
+		return nil, true, err
+	}
 	nodes = append(nodes, groupNodes...)
 	return nodes, true, nil
 }
 
-func parseClashProxyGroups(groups []map[string]any, validTags map[string]bool) []ParsedNode {
+func parseClashProxyGroups(groups []map[string]any, validTags map[string]ParsedNode) ([]ParsedNode, error) {
 	nodes := make([]ParsedNode, 0, len(groups))
 	for _, g := range groups {
-		if node, ok := convertClashGroupToNode(g, validTags); ok {
+		node, ok, err := convertClashGroupToNode(g, validTags)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			nodes = append(nodes, node)
 		}
 	}
-	return nodes
+	return nodes, nil
 }
 
-func convertClashGroupToNode(group map[string]any, validTags map[string]bool) (ParsedNode, bool) {
+func convertClashGroupToNode(group map[string]any, validTags map[string]ParsedNode) (ParsedNode, bool, error) {
 	name := strings.TrimSpace(getString(group, "name"))
 	if name == "" {
-		return ParsedNode{}, false
+		return ParsedNode{}, false, nil
 	}
 	groupType := strings.ToLower(strings.TrimSpace(getString(group, "type")))
 	rawProxies := getStringSlice(group, "proxies")
 	if len(rawProxies) == 0 {
-		return ParsedNode{}, false
+		return ParsedNode{}, false, nil
 	}
 
 	proxies := make([]string, 0, len(rawProxies))
 	for _, p := range rawProxies {
-		if validTags == nil || validTags[p] {
+		if _, valid := validTags[p]; validTags == nil || valid {
 			proxies = append(proxies, p)
 		}
 	}
 	if len(proxies) == 0 {
-		return ParsedNode{}, false
+		return ParsedNode{}, false, nil
 	}
 
 	outbound := make(map[string]any)
@@ -276,6 +283,9 @@ func convertClashGroupToNode(group map[string]any, validTags map[string]bool) (P
 		outbound["type"] = "urltest"
 		if groupType == "fallback" {
 			outbound["type"] = "fallback"
+			if err := addTieredFallback(group, validTags, outbound); err != nil {
+				return ParsedNode{}, false, err
+			}
 			if timeout, ok := getUint(group, "timeout"); ok && timeout > 0 {
 				outbound["timeout"] = fmt.Sprintf("%dms", timeout)
 			}
@@ -314,17 +324,17 @@ func convertClashGroupToNode(group map[string]any, validTags map[string]bool) (P
 			outbound["default"] = defaultProxy
 		}
 	default:
-		return ParsedNode{}, false
+		return ParsedNode{}, false, nil
 	}
 
 	raw, err := json.Marshal(outbound)
 	if err != nil {
-		return ParsedNode{}, false
+		return ParsedNode{}, false, nil
 	}
 	return ParsedNode{
 		Tag:        name,
 		RawOptions: raw,
-	}, true
+	}, true, nil
 }
 
 func parseClashProxies(proxies []map[string]any) []ParsedNode {

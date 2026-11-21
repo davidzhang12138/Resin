@@ -268,6 +268,13 @@ func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, er
 		}
 	}
 
+	if opts, ok := outboundConfig.Options.(*option.SOCKSOutboundOptions); ok &&
+		b.detourMgr != nil && opts.Detour != "" && (opts.Version == "" || opts.Version == "5") {
+		return &fallbackSOCKS{
+			Outbound: ob, manager: b.detourMgr, detour: opts.Detour, server: opts.ServerOptions.Build(),
+			username: opts.Username, password: opts.Password,
+		}, nil
+	}
 	return ob, nil
 }
 
