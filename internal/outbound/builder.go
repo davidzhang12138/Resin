@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	sbOutbound "github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/dns"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
@@ -20,7 +22,6 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
-	"sync/atomic"
 )
 
 // OutboundResolverFunc resolves an outbound by its tag from an external source (e.g. node pool).
@@ -147,8 +148,8 @@ func (b *SingboxBuilder) SetOutboundResolver(resolver OutboundResolverFunc) {
 // when done.
 func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, error) {
 	ctx := context.Background()
-	ctx = include.Context(ctx)          // inject protocol registries
-	ctx = pause.WithDefaultManager(ctx) // required by URLTest and other sing-box groups
+	ctx = include.Context(ctx) // inject protocol registries
+	ctx = pause.WithDefaultManager(ctx)
 	registerFallback(service.FromContext[adapter.OutboundRegistry](ctx).(*sbOutbound.Registry))
 
 	logFactory := log.NewNOPFactory()
@@ -229,17 +230,68 @@ func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, err
 // type/tag fields) into a real adapter.Outbound and runs it through the
 // lifecycle stages.
 func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, error) {
+	return b.build(rawOptions, nil)
+}
+
+func (b *SingboxBuilder) BuildWithDetour(rawOptions json.RawMessage, upstream adapter.Outbound) (adapter.Outbound, error) {
+	return b.build(rawOptions, upstream)
+}
+
+func (b *SingboxBuilder) build(rawOptions json.RawMessage, upstream adapter.Outbound) (adapter.Outbound, error) {
+	ctx := b.ctx
 	// 1. Parse via official option.Outbound path (strips type/tag, creates
 	//    typed options via OutboundOptionsRegistry + badjson.UnmarshallExcluded).
 	var outboundConfig option.Outbound
 	if err := sJson.UnmarshalContext(b.ctx, rawOptions, &outboundConfig); err != nil {
 		return nil, fmt.Errorf("parse outbound options: %w", err)
 	}
+	options, canDetour := outboundConfig.Options.(option.DialerOptionsWrapper)
+	originalDetour := ""
+	if canDetour {
+		// Save the subscription's detour before the chain/observe logic
+		// replaces it with resinDetourTag.
+		originalDetour = options.TakeDialerOptions().Detour
+	}
+	observeServer := false
+	if upstream == nil && canDetour && originalDetour == "" {
+		// Observe server TCP dials through the same scoped detour mechanism.
+		// Packet transports retain their native dialer defaults and lifecycle.
+		switch outboundConfig.Type {
+		case "socks", "http", "ssh", "shadowsocks", "vmess", "vless", "trojan", "anytls":
+			observeServer = true
+		}
+	}
+	if upstream != nil || observeServer {
+		if !canDetour {
+			return nil, fmt.Errorf("outbound %s does not support detour", outboundConfig.Type)
+		}
+		ctx = service.ContextWithRegistry(ctx, &outboundRegistryScope{
+			local: service.NewRegistry(), parent: service.RegistryFromContext(b.ctx),
+		})
+		dial := options.TakeDialerOptions()
+		if observeServer {
+			service.MustRegister[adapter.DNSRouter](ctx, &serverDNSRouter{DNSRouter: service.FromContext[adapter.DNSRouter](ctx)})
+			server := outboundConfig.Options.(option.ServerOptionsWrapper).TakeServerOptions()
+			base, err := dialer.New(ctx, dial, server.ServerIsDomain())
+			if err != nil {
+				return nil, fmt.Errorf("create server dialer: %w", err)
+			}
+			upstream = &serverDialer{Adapter: newChainAdapter(), Dialer: base}
+			// The wrapped original dialer already resolves the server. Resolving
+			// outside it would lose attribution and change address fallback.
+			dial.DomainResolver = nil
+		}
+		dial.Detour = resinDetourTag
+		options.ReplaceDialerOptions(dial)
+		service.MustRegister[adapter.OutboundManager](ctx, &detourManager{
+			OutboundManager: service.FromContext[adapter.OutboundManager](b.ctx), upstream: upstream,
+		})
+	}
 
 	// 2. Create the outbound instance via the registry.
 	logger := b.logFactory.NewLogger("outbound/" + outboundConfig.Type)
 	ob, err := b.registry.CreateOutbound(
-		b.ctx,
+		ctx,
 		nil, // router — not needed for simple dialing
 		logger,
 		outboundConfig.Tag,
@@ -258,8 +310,9 @@ func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, er
 		}
 	}
 
-	// 4. Eagerly resolve and warm up detour dependencies if configured.
-	if b.detourMgr != nil {
+	// 4. Eagerly resolve detour dependencies so a broken detour fails the build
+	// instead of failing every dial. Chain nodes resolve their relay separately.
+	if b.detourMgr != nil && originalDetour != "" {
 		for _, depTag := range ob.Dependencies() {
 			if _, ok := b.detourMgr.Outbound(depTag); !ok {
 				_ = common.Close(ob)
@@ -268,12 +321,16 @@ func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, er
 		}
 	}
 
-	if opts, ok := outboundConfig.Options.(*option.SOCKSOutboundOptions); ok &&
-		b.detourMgr != nil && opts.Detour != "" && (opts.Version == "" || opts.Version == "5") {
-		return &fallbackSOCKS{
-			Outbound: ob, manager: b.detourMgr, detour: opts.Detour, server: opts.ServerOptions.Build(),
-			username: opts.Username, password: opts.Password,
-		}, nil
+	// 5. A subscription SOCKS node whose detour points at a tiered fallback
+	// group retries the complete SOCKS CONNECT through another front.
+	if upstream == nil && originalDetour != "" && b.detourMgr != nil {
+		if opts, ok := outboundConfig.Options.(*option.SOCKSOutboundOptions); ok &&
+			(opts.Version == "" || opts.Version == "5") {
+			return &fallbackSOCKS{
+				Outbound: ob, manager: b.detourMgr, detour: originalDetour, server: opts.ServerOptions.Build(),
+				username: opts.Username, password: opts.Password,
+			}, nil
+		}
 	}
 	return ob, nil
 }

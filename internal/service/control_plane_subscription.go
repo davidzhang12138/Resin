@@ -32,6 +32,8 @@ type SubscriptionResponse struct {
 	HealthyNodeCount        int    `json:"healthy_node_count"`
 	Ephemeral               bool   `json:"ephemeral"`
 	IncrementalAliveNodes   bool   `json:"incremental_alive_nodes"`
+	ChainProxy              bool   `json:"chain_proxy"`
+	ChainRelay              bool   `json:"chain_relay"`
 	EphemeralNodeEvictDelay string `json:"ephemeral_node_evict_delay"`
 	Enabled                 bool   `json:"enabled"`
 	CreatedAt               string `json:"created_at"`
@@ -41,6 +43,7 @@ type SubscriptionResponse struct {
 }
 
 func (s *ControlPlaneService) subToResponse(sub *subscription.Subscription) SubscriptionResponse {
+	chainProxy, chainRelay := sub.ChainConfig()
 	nodeCount := 0
 	healthyNodeCount := 0
 	var isHealthyAndEnabled func(*node.NodeEntry) bool
@@ -84,6 +87,8 @@ func (s *ControlPlaneService) subToResponse(sub *subscription.Subscription) Subs
 		HealthyNodeCount:        healthyNodeCount,
 		Ephemeral:               sub.Ephemeral(),
 		IncrementalAliveNodes:   sub.IncrementalAliveNodes(),
+		ChainProxy:              chainProxy,
+		ChainRelay:              chainRelay,
 		EphemeralNodeEvictDelay: time.Duration(sub.EphemeralNodeEvictDelayNs()).String(),
 		Enabled:                 sub.Enabled(),
 		CreatedAt:               time.Unix(0, sub.CreatedAtNs).UTC().Format(time.RFC3339Nano),
@@ -134,6 +139,8 @@ type CreateSubscriptionRequest struct {
 	Enabled                 *bool   `json:"enabled"`
 	Ephemeral               *bool   `json:"ephemeral"`
 	IncrementalAliveNodes   *bool   `json:"incremental_alive_nodes"`
+	ChainProxy              *bool   `json:"chain_proxy"`
+	ChainRelay              *bool   `json:"chain_relay"`
 	EphemeralNodeEvictDelay *string `json:"ephemeral_node_evict_delay"`
 }
 
@@ -215,6 +222,16 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 	if req.IncrementalAliveNodes != nil {
 		incrementalAliveNodes = *req.IncrementalAliveNodes
 	}
+	chainProxy, chainRelay := false, false
+	if req.ChainProxy != nil {
+		chainProxy = *req.ChainProxy
+	}
+	if req.ChainRelay != nil {
+		chainRelay = *req.ChainRelay
+	}
+	if chainProxy && chainRelay {
+		return nil, invalidArg("chain_proxy and chain_relay are mutually exclusive")
+	}
 	ephemeralNodeEvictDelay := defaultSubscriptionEphemeralNodeEvictDelay
 	if req.EphemeralNodeEvictDelay != nil {
 		d, err := time.ParseDuration(*req.EphemeralNodeEvictDelay)
@@ -240,6 +257,8 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 		Enabled:                   enabled,
 		Ephemeral:                 ephemeral,
 		IncrementalAliveNodes:     incrementalAliveNodes,
+		ChainProxy:                chainProxy,
+		ChainRelay:                chainRelay,
 		EphemeralNodeEvictDelayNs: int64(ephemeralNodeEvictDelay),
 		CreatedAtNs:               now,
 		UpdatedAtNs:               now,
@@ -253,6 +272,7 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 	sub.SetSourceType(sourceType)
 	sub.SetContent(content)
 	sub.SetIncrementalAliveNodes(incrementalAliveNodes)
+	sub.SetChainConfig(chainProxy, chainRelay)
 	sub.SetEphemeralNodeEvictDelayNs(int64(ephemeralNodeEvictDelay))
 	sub.CreatedAtNs = now
 	sub.UpdatedAtNs = now
@@ -266,6 +286,56 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 // This is not RFC 7396 JSON Merge Patch: patch must be a non-empty object and
 // null values are rejected.
 func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMessage) (*SubscriptionResponse, error) {
+	sub := s.SubMgr.Lookup(id)
+	if sub == nil {
+		return nil, notFound("subscription not found")
+	}
+	var result *SubscriptionResponse
+	var updateErr error
+	var effects subscriptionUpdateEffects
+	sub.WithOpLock(func() {
+		if s.SubMgr.Lookup(id) != sub {
+			updateErr = notFound("subscription not found")
+			return
+		}
+		result, updateErr = s.updateSubscriptionLocked(sub, patchJSON, &effects)
+	})
+	if updateErr != nil {
+		return nil, updateErr
+	}
+	if s.Pool != nil && effects.chainChanged {
+		sub.ManagedNodes().RangeNodes(func(hash node.Hash, managed subscription.ManagedNode) bool {
+			if !managed.Evicted {
+				s.Pool.ReconcileNodeRole(hash)
+			}
+			return true
+		})
+	}
+	if s.Pool != nil && effects.viewsChanged {
+		s.Pool.RebuildAllPlatforms()
+	}
+	if s.Scheduler != nil {
+		s.Scheduler.RecheckNodes(effects.reenabled)
+		if effects.refresh {
+			go s.Scheduler.UpdateSubscription(sub)
+		}
+	}
+	if result != nil {
+		response := s.subToResponse(sub)
+		result = &response
+	}
+	return result, nil
+}
+
+type subscriptionUpdateEffects struct {
+	chainChanged, viewsChanged, refresh bool
+	reenabled                           []node.Hash
+}
+
+// The subscription operation lock spans merge, validation, durable write and
+// publication. External rebuild/probe callbacks run after releasing it.
+func (s *ControlPlaneService) updateSubscriptionLocked(sub *subscription.Subscription, patchJSON json.RawMessage, effects *subscriptionUpdateEffects) (*SubscriptionResponse, error) {
+	id := sub.ID
 	patch, verr := parseMergePatch(patchJSON)
 	if verr != nil {
 		return nil, verr
@@ -274,11 +344,6 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 		return fmt.Sprintf("field %q is read-only or unknown", key)
 	}); err != nil {
 		return nil, err
-	}
-
-	sub := s.SubMgr.Lookup(id)
-	if sub == nil {
-		return nil, notFound("subscription not found")
 	}
 
 	// Track what changed for side-effects.
@@ -363,6 +428,21 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 	} else if ok {
 		newIncrementalAliveNodes = b
 	}
+	oldChainProxy, oldChainRelay := sub.ChainConfig()
+	newChainProxy, newChainRelay := oldChainProxy, oldChainRelay
+	if b, ok, err := patch.optionalBool("chain_proxy"); err != nil {
+		return nil, err
+	} else if ok {
+		newChainProxy = b
+	}
+	if b, ok, err := patch.optionalBool("chain_relay"); err != nil {
+		return nil, err
+	} else if ok {
+		newChainRelay = b
+	}
+	if newChainProxy && newChainRelay {
+		return nil, invalidArg("chain_proxy and chain_relay are mutually exclusive")
+	}
 
 	newEphemeralNodeEvictDelay := sub.EphemeralNodeEvictDelayNs()
 	if d, ok, err := patch.optionalDurationString("ephemeral_node_evict_delay"); err != nil {
@@ -385,6 +465,8 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 		Enabled:                   newEnabled,
 		Ephemeral:                 newEphemeral,
 		IncrementalAliveNodes:     newIncrementalAliveNodes,
+		ChainProxy:                newChainProxy,
+		ChainRelay:                newChainRelay,
 		EphemeralNodeEvictDelayNs: newEphemeralNodeEvictDelay,
 		CreatedAtNs:               sub.CreatedAtNs,
 		UpdatedAtNs:               now,
@@ -392,24 +474,29 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 	if err := s.Engine.UpsertSubscription(ms); err != nil {
 		return nil, internal("persist subscription", err)
 	}
+	if enabledChanged && newEnabled && s.Pool != nil {
+		sub.ManagedNodes().RangeNodes(func(hash node.Hash, managed subscription.ManagedNode) bool {
+			if !managed.Evicted && s.Pool.IsNodeDisabled(hash) {
+				effects.reenabled = append(effects.reenabled, hash)
+			}
+			return true
+		})
+	}
 
 	// Apply side-effects via scheduler.
 	sub.SetFetchConfig(newURL, newInterval)
 	sub.SetContent(newContent)
 	sub.SetEphemeral(newEphemeral)
 	sub.SetIncrementalAliveNodes(newIncrementalAliveNodes)
+	sub.SetChainConfig(newChainProxy, newChainRelay)
+	sub.SetName(newName)
+	sub.SetEnabled(newEnabled)
 	sub.SetEphemeralNodeEvictDelayNs(newEphemeralNodeEvictDelay)
 	sub.UpdatedAtNs = now
 
-	if nameChanged {
-		s.Scheduler.RenameSubscription(sub, newName)
-	}
-	if enabledChanged {
-		s.Scheduler.SetSubscriptionEnabled(sub, newEnabled)
-	}
-	if urlChanged || contentChanged {
-		go s.Scheduler.UpdateSubscription(sub)
-	}
+	effects.chainChanged = oldChainProxy != newChainProxy || oldChainRelay != newChainRelay
+	effects.viewsChanged = nameChanged || enabledChanged
+	effects.refresh = urlChanged || contentChanged
 
 	r := s.subToResponse(sub)
 	return &r, nil

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/sagernet/sing-box/adapter"
 )
 
 type testPoolAccessor struct {
@@ -42,6 +43,20 @@ func (p *testPoolAccessor) RangeNodes(fn func(node.Hash, *node.NodeEntry) bool) 
 			break
 		}
 	}
+}
+
+func (p *testPoolAccessor) ResolveNodeDisplayTag(hash node.Hash) string {
+	if e, ok := p.entries[hash]; ok {
+		return node.ExtractTagFromRawOptions(e.GetRawOptions())
+	}
+	return ""
+}
+
+func (p *testPoolAccessor) IsRelayEligible(node.Hash, string) bool { return false }
+
+func (p *testPoolAccessor) PublishOutbound(entry *node.NodeEntry, version uint64, previous, next *adapter.Outbound) bool {
+	current, ok := p.entries[entry.Hash]
+	return ok && current == entry && entry.RoutingVersion() == version && entry.Outbound.CompareAndSwap(previous, next)
 }
 
 func TestDetour_DirectChaining(t *testing.T) {

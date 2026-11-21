@@ -22,8 +22,8 @@ const (
 	//
 	// NOTE: 7 is our local migration (max_node_reference_latency). The upstream
 	// migration series (endpoints=7, enabled=8, regex rules=9) collides with it,
-	// so upstream migrations are renumbered to 10/11/12 on this fork. See the
-	// 000010_/000011_/000012_ SQL files under migrations/state/.
+	// so upstream migrations are renumbered to 10/11/12/13 on this fork. See the
+	// 000010_/000011_/000012_/000013_ SQL files under migrations/state/.
 	stateVersionBaseSchema                         = 1
 	stateVersionAddEmptyAccountBehavior            = 2
 	stateVersionAddFixedAccountHeader              = 3
@@ -36,7 +36,8 @@ const (
 	stateVersionAddEndpoints                       = 10
 	stateVersionAddEndpointEnabled                 = 11
 	stateVersionPlatformRegexFilterRules           = 12
-	stateLatestVersion                             = stateVersionPlatformRegexFilterRules
+	stateVersionSubscriptionChainProxy             = 13
+	stateLatestVersion                             = stateVersionSubscriptionChainProxy
 	stateLegacyBaselineVersion                     = stateVersionAddFixedAccountHeader
 
 	stateBaseSchemaMigration = stateMigrationsPath + "/000001_state_base.up.sql"
@@ -134,8 +135,9 @@ func prepareStateMigrationCompatibility(db *sql.DB, driver migratedb.Driver) err
 		return setMigrationVersion(driver, stateVersionAddEndpointEnabled)
 	case stateUpstreamVersionPlatformRegexFilterRules:
 		// Upstream 000009 already converted regex filters. Skip the fork's
-		// equivalent migration to avoid adding '*' prefixes a second time.
-		return setMigrationVersion(driver, stateLatestVersion)
+		// equivalent migration to avoid adding '*' prefixes a second time,
+		// but still apply the newer fork migrations (subscription chain proxy).
+		return setMigrationVersion(driver, stateVersionPlatformRegexFilterRules)
 	default:
 		return nil
 	}
