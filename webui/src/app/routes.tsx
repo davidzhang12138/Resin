@@ -3,6 +3,7 @@ import { AppShell } from "../components/AppShell";
 import { LoginPage } from "../features/auth/LoginPage";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { EndpointsPage } from "../features/endpoints/EndpointsPage";
+import { FreePoolPage } from "../features/freePool/FreePoolPage";
 import { GeoIPPage } from "../features/geoip/GeoIPPage";
 import { NodesPage } from "../features/nodes/NodesPage";
 import { RequireAuth } from "../features/auth/RequireAuth";
@@ -37,6 +38,7 @@ export function AppRoutes() {
         <Route path="/platforms/:platformId" element={<PlatformDetailPage />} />
         <Route path="/platforms/:platformId/leases" element={<PlatformLeasesPage />} />
         <Route path="/subscriptions" element={<SubscriptionPage />} />
+        <Route path="/free-pool" element={<FreePoolPage />} />
         <Route path="/nodes" element={<NodesRoute />} />
         <Route path="/endpoints" element={<EndpointsPage />} />
         <Route path="/rules" element={<RulesPage />} />

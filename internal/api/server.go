@@ -127,6 +127,13 @@ func NewServerWithAddress(
 		authed.Handle("GET /api/v1/geoip/lookup", HandleGeoIPLookup(cp))
 		authed.Handle("POST /api/v1/geoip/lookup", HandleGeoIPLookupPost(cp))
 		authed.Handle("POST /api/v1/geoip/actions/update-now", HandleGeoIPUpdate(cp))
+
+		// Free Pool Maintainer.
+		authed.Handle("GET /api/v1/free-pool/status", HandleFreePoolStatus(cp))
+		authed.Handle("PATCH /api/v1/free-pool/config", HandlePatchFreePoolConfig(cp))
+		authed.Handle("POST /api/v1/free-pool/actions/run", HandleFreePoolRun(cp))
+		authed.Handle("POST /api/v1/free-pool/actions/stop", HandleFreePoolStop(cp))
+		authed.Handle("GET /api/v1/free-pool/subscription", HandleFreePoolSubscription(cp))
 	}
 
 	// Request log endpoints (always registered if repo is available).

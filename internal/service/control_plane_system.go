@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/config"
+	"github.com/Resinat/Resin/internal/freepool"
 	"github.com/Resinat/Resin/internal/geoip"
 	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/probe"
@@ -62,6 +63,7 @@ type ControlPlaneService struct {
 	RuntimeCfg      *atomic.Pointer[config.RuntimeConfig]
 	EnvCfg          *config.EnvConfig
 	EndpointRuntime EndpointRuntime
+	FreePool        *freepool.Service
 
 	configMu      sync.Mutex
 	configVersion int

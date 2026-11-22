@@ -16,6 +16,7 @@ import (
 	"github.com/Resinat/Resin/internal/api"
 	"github.com/Resinat/Resin/internal/buildinfo"
 	"github.com/Resinat/Resin/internal/config"
+	"github.com/Resinat/Resin/internal/freepool"
 	"github.com/Resinat/Resin/internal/geoip"
 	"github.com/Resinat/Resin/internal/metrics"
 	"github.com/Resinat/Resin/internal/netutil"
@@ -33,6 +34,8 @@ type resinApp struct {
 	runtimeCfg      *atomic.Pointer[config.RuntimeConfig]
 	accountMatcher  *proxy.AccountMatcherRuntime
 	geoSvc          *geoip.Service
+	retryDL         *netutil.RetryDownloader
+	freePoolSvc     *freepool.Service
 	topoRuntime     *topologyRuntime
 	flushWorker     *state.CacheFlushWorker
 	metricsDB       *metrics.MetricsRepo
@@ -106,6 +109,7 @@ func newResinApp(envCfg *config.EnvConfig, engine *state.StateEngine) (*resinApp
 	if err != nil {
 		return nil, err
 	}
+	app.retryDL = retryDL
 	app.wireRetryDownloader(retryDL)
 
 	if err := app.bootstrapFromPersistence(engine); err != nil {
@@ -360,6 +364,11 @@ func (a *resinApp) startBackgroundServices() {
 	a.topoRuntime.scheduler.Start()
 	a.topoRuntime.scheduler.ForceRefreshAllAsync()
 	log.Println("Subscription scheduler started; forced full refresh running in background (batch 3)")
+
+	if a.freePoolSvc != nil {
+		a.freePoolSvc.Start()
+		log.Println("FreePool maintainer started (batch 3)")
+	}
 }
 
 func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
@@ -383,6 +392,26 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		GeoIP:          a.geoSvc,
 		MatcherRuntime: a.accountMatcher,
 	}
+
+	freePoolSvc, err := freepool.NewService(freepool.ServiceConfig{
+		StateDir:   a.envCfg.StateDir,
+		CacheDir:   a.envCfg.CacheDir,
+		Downloader: a.retryDL,
+		Checker: &freepool.Checker{
+			Factory:        a.topoRuntime.singboxBuilder,
+			DirectUpstream: freepool.NewDirectUpstream(),
+		},
+		Relays: &freepool.ResinRelayPicker{
+			Pool:   a.topoRuntime.pool,
+			Router: a.topoRuntime.router,
+		},
+		Syncer: cpService,
+	})
+	if err != nil {
+		return fmt.Errorf("free pool service: %w", err)
+	}
+	a.freePoolSvc = freePoolSvc
+	cpService.FreePool = freePoolSvc
 
 	apiSrv := api.NewServerWithAddress(
 		a.envCfg.ListenAddress,
@@ -558,6 +587,11 @@ func (a *resinApp) shutdown(ctx context.Context) {
 
 	// Stop in order: event sources first, then sinks, then persistence.
 	// 1. Stop all event sources (no more events after this).
+	if a.freePoolSvc != nil {
+		a.freePoolSvc.Stop()
+		log.Println("FreePool maintainer stopped")
+	}
+
 	a.topoRuntime.leaseCleaner.Stop()
 	log.Println("Lease cleaner stopped")
 
