@@ -886,6 +886,21 @@ Note: Once enabled, requests without authentication information are rejected ins
   "来源": "Source",
   "HTTPS 延迟": "HTTPS Latency",
   "暂无已筛选节点，点击右上角「立即采集筛选」开始。": "No verified nodes yet. Click Run Now to start.",
+  "严格 TLS 证书与反劫持校验": "Strict TLS & anti-hijack verification",
+  "按源配置校验": "Use source TLS config",
+  "本轮 SSH 22 通过": "SSH 22 Passed (Run)",
+  "已同步可用节点": "Synced Nodes",
+  "当前池内": "In pool",
+  "前置链路": "Front Relay",
+  "定时": "Auto",
+  "手动": "Manual",
+  "调度与安全校验": "Schedule & Security",
+  "探测性能与门槛": "Probing & Thresholds",
+  "前置链路与订阅同步": "Relay & Subscription Sync",
+  "目标平台名称": "Target Platform Name",
+  "过滤协议 / 标签 / IP / 来源": "Filter protocol / tag / IP / source",
+  "没有匹配当前过滤条件的节点": "No nodes match the current filter",
+  "直连": "Direct",
 };
 
 export function translateDocumentTitle(locale: AppLocale): string {
