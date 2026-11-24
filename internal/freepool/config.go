@@ -34,29 +34,29 @@ type Source struct {
 
 // Config holds persisted configuration for the free node pool maintainer.
 type Config struct {
-	Enabled                 bool     `json:"enabled"`
-	Interval                string   `json:"interval"`
-	Sources                 []Source `json:"sources"`
-	MaxCandidates           int      `json:"max_candidates"`
-	MaxKeepNodes            int      `json:"max_keep_nodes"`
-	Concurrency             int      `json:"concurrency"`
-	ProbeTimeout            string   `json:"probe_timeout"`
-	MaxLatencyMs            int      `json:"max_latency_ms"`
-	HTTPSCheckURL           string   `json:"https_check_url"`
-	EnforceStrictTLS        bool     `json:"enforce_strict_tls"`
-	RequireSSHPort22        bool     `json:"require_ssh_port22"`
-	SSHCheckTarget          string   `json:"ssh_check_target"`
-	RelayMode               string   `json:"relay_mode"`
-	RelayPlatform           string   `json:"relay_platform"`
-	TargetSubscriptionName  string   `json:"target_subscription_name"`
-	TargetSubscriptionID    string   `json:"target_subscription_id"`
-	SyncChainProxy          bool     `json:"sync_chain_proxy"`
-	SyncDetourTag           string   `json:"sync_detour_tag"`
-	SyncEphemeral           bool     `json:"sync_ephemeral"`
-	SyncIncrementalAlive    bool     `json:"sync_incremental_alive"`
-	SyncEvictDelay          string   `json:"sync_evict_delay"`
-	EnsurePlatform          bool     `json:"ensure_platform"`
-	TargetPlatformName      string   `json:"target_platform_name"`
+	Enabled                bool     `json:"enabled"`
+	Interval               string   `json:"interval"`
+	Sources                []Source `json:"sources"`
+	MaxCandidates          int      `json:"max_candidates"`
+	MaxKeepNodes           int      `json:"max_keep_nodes"`
+	Concurrency            int      `json:"concurrency"`
+	ProbeTimeout           string   `json:"probe_timeout"`
+	MaxLatencyMs           int      `json:"max_latency_ms"`
+	HTTPSCheckURL          string   `json:"https_check_url"`
+	EnforceStrictTLS       bool     `json:"enforce_strict_tls"`
+	RequireSSHPort22       bool     `json:"require_ssh_port22"`
+	SSHCheckTarget         string   `json:"ssh_check_target"`
+	RelayMode              string   `json:"relay_mode"`
+	RelayPlatform          string   `json:"relay_platform"`
+	TargetSubscriptionName string   `json:"target_subscription_name"`
+	TargetSubscriptionID   string   `json:"target_subscription_id"`
+	SyncChainProxy         bool     `json:"sync_chain_proxy"`
+	SyncDetourTag          string   `json:"sync_detour_tag"`
+	SyncEphemeral          bool     `json:"sync_ephemeral"`
+	SyncIncrementalAlive   bool     `json:"sync_incremental_alive"`
+	SyncEvictDelay         string   `json:"sync_evict_delay"`
+	EnsurePlatform         bool     `json:"ensure_platform"`
+	TargetPlatformName     string   `json:"target_platform_name"`
 }
 
 // DefaultConfig returns sensible defaults with both SOCKS5 lists and free
@@ -96,6 +96,27 @@ func DefaultConfig() Config {
 				Enabled: true,
 			},
 			{
+				ID:      "proxyscrape-socks5",
+				Name:    "ProxyScrape SOCKS5",
+				URL:     "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+				Kind:    SourceKindSOCKS5List,
+				Enabled: true,
+			},
+			{
+				ID:      "vpslab-socks5",
+				Name:    "VPSLab SOCKS5",
+				URL:     "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks5_all.txt",
+				Kind:    SourceKindSOCKS5List,
+				Enabled: true,
+			},
+			{
+				ID:      "stormsia-socks5",
+				Name:    "stormsia SOCKS5",
+				URL:     "https://raw.githubusercontent.com/stormsia/proxy-list/main/socks5.txt",
+				Kind:    SourceKindSOCKS5List,
+				Enabled: true,
+			},
+			{
 				ID:      "nomorewalls",
 				Name:    "NoMoreWalls",
 				URL:     "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list_raw.txt",
@@ -120,6 +141,55 @@ func DefaultConfig() Config {
 				ID:      "mahdibland-v2ray",
 				Name:    "V2RayAggregator",
 				URL:     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "leon406-vless",
+				Name:    "SubCrawler VLESS",
+				URL:     "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/vless",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "mheidari-all",
+				Name:    "mheidari Free Nodes",
+				URL:     "https://raw.githubusercontent.com/mheidari98/.proxy/main/all",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "surfboard-mixed",
+				Name:    "TGParse Mixed",
+				URL:     "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/main/splitted/mixed",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "aliilapro-server",
+				Name:    "ALIILAPRO V2Ray",
+				URL:     "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "barabama-free-nodes",
+				Name:    "FreeNodes",
+				URL:     "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/nodev2ray.txt",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "mhditaheri-mix",
+				Name:    "V2rayCollector Mix",
+				URL:     "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix",
+				Kind:    SourceKindSubscription,
+				Enabled: true,
+			},
+			{
+				ID:      "ts-sf-fly",
+				Name:    "fly v2",
+				URL:     "https://raw.githubusercontent.com/ts-sf/fly/main/v2",
 				Kind:    SourceKindSubscription,
 				Enabled: true,
 			},
