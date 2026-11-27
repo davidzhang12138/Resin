@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Resinat/Resin/internal/config"
+	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/sagernet/sing-box/adapter"
 	sbOutbound "github.com/sagernet/sing-box/adapter/outbound"
 	M "github.com/sagernet/sing/common/metadata"
@@ -270,6 +272,34 @@ func (m *pipeMockOutbound) DialContext(_ context.Context, _ string, destination 
 
 func (m *pipeMockOutbound) ListenPacket(_ context.Context, _ M.Socksaddr) (net.PacketConn, error) {
 	return nil, errors.New("udp not implemented")
+}
+
+func TestSSHBannerReturnsForUnopenedEarlyWebSocket(t *testing.T) {
+	builder, err := outbound.NewSingboxBuilderWithConfig(outbound.SingboxBuilderConfig{
+		DNSUpstreams: config.DefaultNodeDNSUpstreams(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = builder.Close() })
+
+	ob, err := builder.Build(json.RawMessage(`{
+		"type": "vless",
+		"server": "127.0.0.1",
+		"server_port": 1,
+		"uuid": "9b674859-b399-4d03-b8b8-cbe9aef4dbad",
+		"transport": {"type": "ws", "max_early_data": 2048}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeOutbound(ob) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := checkSSHBanner(ctx, ob, "127.0.0.1:22"); err == nil {
+		t.Fatal("expected an unopened WebSocket to fail the server-first banner check")
+	}
 }
 
 type mockDownloader struct {

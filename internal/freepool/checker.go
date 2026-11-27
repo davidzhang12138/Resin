@@ -16,6 +16,8 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	sbOutbound "github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/transport/v2raywebsocket"
+	"github.com/sagernet/sing/common"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -348,6 +350,11 @@ func checkSSHBanner(ctx context.Context, ob adapter.Outbound, target string) (in
 		return 0, fmt.Errorf("ssh dial %s: %w", target, err)
 	}
 	defer conn.Close()
+
+	// Reading before the first write waits for a WebSocket that Close cannot unblock.
+	if ws, ok := common.Cast[*v2raywebsocket.EarlyWebsocketConn](conn); ok && ws.LazyHeadroom() {
+		return 0, errors.New("ssh banner read: WebSocket handshake requires a client write")
+	}
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
